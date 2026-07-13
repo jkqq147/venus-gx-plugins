@@ -8,3 +8,4 @@ pub mod runit;
 pub mod service;
 pub mod settings;
 pub mod signing;
+pub mod update;

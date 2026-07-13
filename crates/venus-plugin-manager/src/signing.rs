@@ -7,7 +7,7 @@ use std::{
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use plugin_manager_core::{CatalogEntry, PackageSignature};
+use plugin_manager_core::{CatalogEntry, PackageSignature, PackageSource};
 use rand_core::OsRng;
 use thiserror::Error;
 
@@ -61,20 +61,32 @@ impl CatalogVerifier {
     }
 
     pub fn verify(&self, entry: &CatalogEntry) -> Result<(), SigningError> {
-        if entry.package.signature.key_id != self.key_id {
+        self.verify_artifact(&entry.id, &entry.version, &entry.package)
+    }
+
+    pub(crate) fn verify_artifact(
+        &self,
+        id: &str,
+        version: &str,
+        package: &PackageSource,
+    ) -> Result<(), SigningError> {
+        if package.signature.key_id != self.key_id {
             return Err(SigningError::UntrustedKey {
-                id: entry.id.clone(),
-                key_id: entry.package.signature.key_id.clone(),
+                id: id.into(),
+                key_id: package.signature.key_id.clone(),
             });
         }
         let bytes = STANDARD
-            .decode(&entry.package.signature.ed25519)
-            .map_err(|_| SigningError::InvalidSignatureEncoding(entry.id.clone()))?;
+            .decode(&package.signature.ed25519)
+            .map_err(|_| SigningError::InvalidSignatureEncoding(id.into()))?;
         let signature = Signature::from_slice(&bytes)
-            .map_err(|_| SigningError::InvalidSignatureEncoding(entry.id.clone()))?;
+            .map_err(|_| SigningError::InvalidSignatureEncoding(id.into()))?;
         self.key
-            .verify_strict(&signature_message(entry), &signature)
-            .map_err(|_| SigningError::VerificationFailed(entry.id.clone()))
+            .verify_strict(
+                &signature_message_parts(id, version, &package.sha256),
+                &signature,
+            )
+            .map_err(|_| SigningError::VerificationFailed(id.into()))
     }
 }
 
@@ -119,10 +131,6 @@ fn load_signing_key(path: &Path) -> Result<SigningKey, SigningError> {
         .try_into()
         .map_err(|_| SigningError::InvalidKey("private key must contain 32 bytes".into()))?;
     Ok(SigningKey::from_bytes(&bytes))
-}
-
-fn signature_message(entry: &CatalogEntry) -> Vec<u8> {
-    signature_message_parts(&entry.id, &entry.version, &entry.package.sha256)
 }
 
 pub(crate) fn signature_message_parts(id: &str, version: &str, sha256: &str) -> Vec<u8> {

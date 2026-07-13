@@ -16,5 +16,6 @@ jobs:
       - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/tpms/manifest.json
       - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/rathole/manifest.json
       - run: cargo run --locked --bin venus-plugin-manager -- validate-catalog catalog/plugins.json
+      - run: cargo run --locked --bin venus-plugin-manager -- validate-manager-release manager/release.json
       - run: sh -n scripts/build-armv7.sh scripts/package-tpms.sh
       - run: bash -n scripts/build-pages-dist.sh

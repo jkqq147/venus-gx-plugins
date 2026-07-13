@@ -6,12 +6,14 @@ use plugin_manager_core::{
 
 const USAGE: &str = "用法:
   venus-plugin-manager serve
+  venus-plugin-manager version
   venus-plugin-manager install-manager
   venus-plugin-manager pack-vplugin <source-dir> <output.vplugin>
   venus-plugin-manager generate-signing-key <private-key-path>
   venus-plugin-manager sign-catalog-entry <private-key-path> <id> <version> <sha256>
   venus-plugin-manager validate-manifest <manifest.json>
   venus-plugin-manager validate-catalog <plugins.json>
+  venus-plugin-manager validate-manager-release <release.json>
   venus-plugin-manager registry-init <state-root>
   venus-plugin-manager registry-list <state-root>
   venus-plugin-manager install-vplugin <state-root> <package.vplugin> <id> <version> <sha256>
@@ -33,6 +35,10 @@ fn run(args: Vec<String>) -> Result<(), String> {
             venus_plugin_manager::service::ServiceConfig::from_env(),
         )
         .map_err(|error| error.to_string()),
+        [command] if command == "version" => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         [command] if command == "install-manager" => {
             venus_plugin_manager::installer::install(
                 venus_plugin_manager::installer::InstallConfig::device(),
@@ -40,6 +46,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
             println!("Plugin Manager 已安装，入口位于 Settings > Plugins");
             Ok(())
+        }
+        [command, expected_version] if command == "apply-manager-update" => {
+            apply_manager_update(expected_version)
         }
         [command, source, output] if command == "pack-vplugin" => {
             let package = venus_plugin_manager::package_builder::build_vplugin(
@@ -75,6 +84,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         [command, path] if command == "validate-manifest" => validate_manifest(Path::new(path)),
         [command, path] if command == "validate-catalog" => validate_catalog(Path::new(path)),
+        [command, path] if command == "validate-manager-release" => {
+            validate_manager_release(Path::new(path))
+        }
         [command, root] if command == "registry-init" => registry_init(Path::new(root)),
         [command, root] if command == "registry-list" => registry_list(Path::new(root)),
         [command, root, package, id, version, sha256] if command == "install-vplugin" => {
@@ -93,6 +105,23 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         _ => Err(USAGE.into()),
     }
+}
+
+fn apply_manager_update(expected_version: &str) -> Result<(), String> {
+    if expected_version != env!("CARGO_PKG_VERSION") {
+        return Err(format!(
+            "update expected version {expected_version}, binary is {}",
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    let config = venus_plugin_manager::installer::InstallConfig::device();
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    if executable.parent() != Some(config.app_root.join("downloads").as_path()) {
+        return Err("manager update must run from the managed downloads directory".into());
+    }
+    venus_plugin_manager::installer::install(config).map_err(|error| error.to_string())?;
+    fs::remove_file(&executable).map_err(|error| format!("{}: {error}", executable.display()))?;
+    Ok(())
 }
 
 fn validate_manifest(path: &Path) -> Result<(), String> {
@@ -123,6 +152,22 @@ fn validate_catalog(path: &Path) -> Result<(), String> {
             .map_err(|error| format!("{}: {error}", path.display()))?;
     }
     println!("valid catalog: {} plugins", catalog.plugins.len());
+    Ok(())
+}
+
+fn validate_manager_release(path: &Path) -> Result<(), String> {
+    let contents = fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let release = venus_plugin_manager::update::validate_release(&contents)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if release.version != env!("CARGO_PKG_VERSION") {
+        return Err(format!(
+            "{}: release version {} does not match manager {}",
+            path.display(),
+            release.version,
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    println!("valid manager release: {}", release.version);
     Ok(())
 }
 

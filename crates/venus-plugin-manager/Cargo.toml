@@ -1,6 +1,6 @@
 [package]
 name = "venus-plugin-manager"
-version = "0.1.1"
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 description = "Venus GX plugin manager"
@@ -12,6 +12,7 @@ ed25519-dalek.workspace = true
 flate2.workspace = true
 plugin-manager-core = { path = "../plugin-manager-core" }
 rand_core.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true

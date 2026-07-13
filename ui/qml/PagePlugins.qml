@@ -8,8 +8,26 @@ MbPage {
 	property VBusItem busy: VBusItem { bind: root.service + "/Busy" }
 	property VBusItem error: VBusItem { bind: root.service + "/LastError" }
 	property VBusItem refresh: VBusItem { bind: root.service + "/Refresh" }
+	property VBusItem managerInstalledVersion: VBusItem { bind: root.service + "/Manager/InstalledVersion" }
+	property VBusItem managerAvailableVersion: VBusItem { bind: root.service + "/Manager/AvailableVersion" }
+	property VBusItem managerHasUpdate: VBusItem { bind: root.service + "/Manager/HasUpdate" }
+	property VBusItem managerUpdate: VBusItem { bind: root.service + "/Manager/Update" }
 
 	model: VisibleItemModel {
+		MbItemValue {
+			description: qsTr("Plugin Manager")
+			value: managerInstalledVersion.valid ? managerInstalledVersion.value : ""
+		}
+
+		MbOK {
+			description: qsTr("Update Plugin Manager")
+			value: busy.value === 1 ? qsTr("Working...") : managerAvailableVersion.value
+			show: managerHasUpdate.value === 1
+			editable: busy.value !== 1
+			enabled: busy.value !== 1
+			onClicked: managerUpdate.setValue(1)
+		}
+
 		MbSubMenu {
 			description: qsTr("Installed plugins")
 			item.bind: root.service + "/InstalledCount"

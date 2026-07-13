@@ -17,12 +17,12 @@ Plugin Manager 只安装管理平台，不会预装任何插件。
 通过 SSH 登录 CCGX，然后运行：
 
 ```sh
-curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.1/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
+curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.3/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
 chmod 0755 /tmp/venus-plugin-manager
 /tmp/venus-plugin-manager install-manager
 ```
 
-安装完成后进入 `Settings > Plugins`，点击 `Refresh` 获取插件目录。
+安装完成后进入 `Settings > Plugins`，点击 `Refresh` 获取插件目录。以后有新版本时，也可以在此直接更新 Plugin Manager。
 
 ## 当前插件
 

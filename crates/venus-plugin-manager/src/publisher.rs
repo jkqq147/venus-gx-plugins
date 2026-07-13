@@ -9,6 +9,7 @@ use zbus::{blocking::Connection, interface, zvariant::OwnedValue};
 use crate::{
     bus_item::{BusItem, BusItemHandle},
     engine::{ManagerSnapshot, PluginSnapshot},
+    update::ManagerUpdateSnapshot,
 };
 
 pub const SERVICE_NAME: &str = "com.victronenergy.pluginmanager";
@@ -16,6 +17,7 @@ pub const SERVICE_NAME: &str = "com.victronenergy.pluginmanager";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManagerCommand {
     Refresh,
+    UpdateManager,
     Install(String),
     SetEnabled(String, bool),
     Uninstall(String),
@@ -53,6 +55,8 @@ impl ManagerPublisher {
             ("/AvailableIds", ""),
             ("/DashboardIds", ""),
             ("/LastError", ""),
+            ("/Manager/InstalledVersion", env!("CARGO_PKG_VERSION")),
+            ("/Manager/AvailableVersion", ""),
         ] {
             publisher.add(path, BusItem::string(value))?;
         }
@@ -61,6 +65,7 @@ impl ManagerPublisher {
             ("/InstalledCount", 0),
             ("/AvailableCount", 0),
             ("/Busy", 0),
+            ("/Manager/HasUpdate", 0),
         ] {
             publisher.add(path, BusItem::i32(value))?;
         }
@@ -74,6 +79,16 @@ impl ManagerPublisher {
                 sender.send(ManagerCommand::Refresh).map_or(2, |_| 0)
             }),
         )?;
+        let sender = publisher.commands.clone();
+        publisher.add(
+            "/Manager/Update",
+            BusItem::writable_i32(0, move |value| {
+                if value != 1 {
+                    return 2;
+                }
+                sender.send(ManagerCommand::UpdateManager).map_or(2, |_| 0)
+            }),
+        )?;
 
         publisher.connection.request_name(SERVICE_NAME)?;
         Ok(publisher)
@@ -82,6 +97,7 @@ impl ManagerPublisher {
     pub fn publish(
         &mut self,
         snapshot: &ManagerSnapshot,
+        manager: &ManagerUpdateSnapshot,
         busy: bool,
         last_error: &str,
     ) -> zbus::Result<()> {
@@ -115,10 +131,14 @@ impl ManagerPublisher {
         self.string("/AvailableIds", &available.join(","))?;
         self.string("/DashboardIds", &dashboards.join(","))?;
         self.string("/LastError", last_error)?;
+        self.string("/Manager/InstalledVersion", &manager.installed_version)?;
+        self.string("/Manager/AvailableVersion", &manager.available_version)?;
         self.i32("/InstalledCount", installed.len() as i32)?;
         self.i32("/AvailableCount", available.len() as i32)?;
         self.i32("/Busy", i32::from(busy))?;
+        self.i32("/Manager/HasUpdate", i32::from(manager.has_update))?;
         self.i32("/Refresh", 0)?;
+        self.i32("/Manager/Update", 0)?;
 
         for plugin in &snapshot.plugins {
             self.publish_plugin(plugin)?;
