@@ -1,11 +1,11 @@
 # Venus GX Plugins 架构
 
-这是第一版目标架构。Plugin Manager 是 Venus OS 与插件之间唯一的管理边界。
+Plugin Manager 是 Venus OS 与插件之间唯一的管理边界。
 
 ```plantuml
 @startuml venus-gx-plugins-architecture
 
-title Venus GX Plugins · 第一版运行时架构
+title Venus GX Plugins · 运行时架构
 
 left to right direction
 skinparam shadowing false
@@ -17,9 +17,9 @@ skinparam defaultFontName Arial
 
 actor "用户" as User
 
-cloud "GitHub Releases" as Releases #e1d5e7 {
-    artifact "插件目录\nplugins.json" as RemoteCatalog
-    artifact "插件包\n*.vplugin" as RemotePackages
+cloud "GitHub" as GitHub #e1d5e7 {
+    artifact "HTTPS 插件目录\nplugins.json" as RemoteCatalog
+    artifact "Release 插件包\n*.vplugin" as RemotePackages
 }
 
 node "CCGX\nVenus OS v3.55 · armv7l" as CCGX {
@@ -31,7 +31,7 @@ node "CCGX\nVenus OS v3.55 · armv7l" as CCGX {
     package "Plugin Manager" as Manager #d5e8d4 {
         component "D-Bus API" as ManagerApi
         component "Lifecycle\nReconciler" as Reconciler
-        component "Catalog 客户端" as CatalogClient
+        component "Catalog 客户端\nHTTPS · Ed25519" as CatalogClient
         component "Registry 与\n安装事务" as TransactionEngine
     }
 
@@ -107,8 +107,16 @@ end note
 - Plugin Manager 安装程序只安装管理平台，不捆绑任何插件运行文件。
 - 插件不能携带安装脚本、远程 shell hook 或 Python 运行环境。
 
-## 当前实现状态
+## 生命周期契约
 
-目前已经完成 Manifest、Catalog、本地 Registry 和安装事务。Registry 中的 `enabled` 字段是 Venus Settings 接入前的临时状态；实现 D-Bus 和 Lifecycle Reconciler 时应移除，避免长期保留两个状态来源。
+生命周期协调只组合三类独立事实：Registry 提供“是否已安装”，Venus Settings 提供“是否应启用”，平台适配器提供服务和界面的实际状态。协调器自身不保存第四份状态。
 
-D-Bus 服务、Lifecycle Reconciler、runit、Venus Settings 和动态 QML Host 尚未接通。
+对 `native-service`，启用时先启动服务再显示界面，关闭时先隐藏界面再停止服务；对 `qml-only`，协调器不会生成服务动作。状态已经一致时不会产生动作，服务启动失败时报告 `Degraded`，由后续协调再次尝试收敛。
+
+## 运行时收敛
+
+Plugin Manager 通过 Venus D-Bus 发布目录、状态和管理命令。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。
+
+目录只接受 HTTPS，刷新时严格校验 schema、URL、SHA-256 格式和 Ed25519 签名；只有完整有效的目录才会原子替换本地缓存。安装包下载后还会重新校验大小、SHA-256、manifest 和归档内容。
+
+Plugin Manager 自身使用静态 ARMv7 二进制安装。安装器只修改带有自身标记的 QML 区块和 runit 链接，更新失败时恢复原文件与服务状态。

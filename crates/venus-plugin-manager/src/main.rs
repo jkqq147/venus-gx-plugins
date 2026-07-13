@@ -5,13 +5,16 @@ use plugin_manager_core::{
 };
 
 const USAGE: &str = "用法:
+  venus-plugin-manager serve
+  venus-plugin-manager install-manager
+  venus-plugin-manager pack-vplugin <source-dir> <output.vplugin>
+  venus-plugin-manager generate-signing-key <private-key-path>
+  venus-plugin-manager sign-catalog-entry <private-key-path> <id> <version> <sha256>
   venus-plugin-manager validate-manifest <manifest.json>
   venus-plugin-manager validate-catalog <plugins.json>
   venus-plugin-manager registry-init <state-root>
   venus-plugin-manager registry-list <state-root>
   venus-plugin-manager install-vplugin <state-root> <package.vplugin> <id> <version> <sha256>
-  venus-plugin-manager enable <state-root> <id>
-  venus-plugin-manager disable <state-root> <id>
   venus-plugin-manager uninstall <state-root> <id> --yes";
 
 fn main() -> ExitCode {
@@ -26,6 +29,50 @@ fn main() -> ExitCode {
 
 fn run(args: Vec<String>) -> Result<(), String> {
     match args.as_slice() {
+        [command] if command == "serve" => venus_plugin_manager::service::run(
+            venus_plugin_manager::service::ServiceConfig::from_env(),
+        )
+        .map_err(|error| error.to_string()),
+        [command] if command == "install-manager" => {
+            venus_plugin_manager::installer::install(
+                venus_plugin_manager::installer::InstallConfig::device(),
+            )
+            .map_err(|error| error.to_string())?;
+            println!("Plugin Manager 已安装，入口位于 Settings > Plugins");
+            Ok(())
+        }
+        [command, source, output] if command == "pack-vplugin" => {
+            let package = venus_plugin_manager::package_builder::build_vplugin(
+                Path::new(source),
+                Path::new(output),
+            )
+            .map_err(|error| error.to_string())?;
+            println!(
+                "built {} {}: {}",
+                package.id, package.version, package.sha256
+            );
+            Ok(())
+        }
+        [command, path] if command == "generate-signing-key" => {
+            let public = venus_plugin_manager::signing::generate_signing_key(Path::new(path))
+                .map_err(|error| error.to_string())?;
+            println!(
+                "key_id={}\npublic_key={public}",
+                venus_plugin_manager::signing::RELEASE_KEY_ID
+            );
+            Ok(())
+        }
+        [command, path, id, version, sha256] if command == "sign-catalog-entry" => {
+            let signature = venus_plugin_manager::signing::sign_catalog_entry(
+                Path::new(path),
+                id,
+                version,
+                sha256,
+            )
+            .map_err(|error| error.to_string())?;
+            println!("{}", signature.ed25519);
+            Ok(())
+        }
         [command, path] if command == "validate-manifest" => validate_manifest(Path::new(path)),
         [command, path] if command == "validate-catalog" => validate_catalog(Path::new(path)),
         [command, root] if command == "registry-init" => registry_init(Path::new(root)),
@@ -41,8 +88,6 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 },
             )
         }
-        [command, root, id] if command == "enable" => set_enabled(Path::new(root), id, true),
-        [command, root, id] if command == "disable" => set_enabled(Path::new(root), id, false),
         [command, root, id, confirmation] if command == "uninstall" && confirmation == "--yes" => {
             uninstall(Path::new(root), id)
         }
@@ -70,6 +115,13 @@ fn validate_catalog(path: &Path) -> Result<(), String> {
     catalog
         .validate()
         .map_err(|error| format!("{}: {error}", path.display()))?;
+    let verifier = venus_plugin_manager::signing::CatalogVerifier::release()
+        .map_err(|error| error.to_string())?;
+    for entry in &catalog.plugins {
+        verifier
+            .verify(entry)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+    }
     println!("valid catalog: {} plugins", catalog.plugins.len());
     Ok(())
 }
@@ -108,15 +160,6 @@ fn install_vplugin(
         InstallOutcome::Unchanged => "无需变更",
     };
     println!("{} {} {}", expectation.id, expectation.version, action);
-    Ok(())
-}
-
-fn set_enabled(root: &Path, id: &str, enabled: bool) -> Result<(), String> {
-    LocalRegistry::new(root)
-        .set_enabled(id, enabled)
-        .map_err(|error| error.to_string())?;
-    let state = if enabled { "启用" } else { "关闭" };
-    println!("{id} 的本地期望状态已设为：{state}");
     Ok(())
 }
 

@@ -1,0 +1,577 @@
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    os::unix::fs::{symlink, PermissionsExt},
+    path::{Path, PathBuf},
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
+
+use thiserror::Error;
+use zbus::{
+    blocking::{Connection, Proxy},
+    zvariant::OwnedValue,
+};
+
+use crate::publisher::SERVICE_NAME;
+
+const BUS_ITEM_INTERFACE: &str = "com.victronenergy.BusItem";
+const SETTINGS_BEGIN: &str = "// BEGIN venus-plugin-manager-settings";
+const SETTINGS_END: &str = "// END venus-plugin-manager-settings";
+const DASHBOARD_BEGIN: &str = "// BEGIN venus-plugin-manager-dashboards";
+const DASHBOARD_END: &str = "// END venus-plugin-manager-dashboards";
+const RC_BEGIN: &str = "# BEGIN venus-plugin-manager";
+const RC_END: &str = "# END venus-plugin-manager";
+
+const SETTINGS_BLOCK: &str = r#"
+		// BEGIN venus-plugin-manager-settings
+		MbSubMenu {
+			description: qsTr("Plugins")
+			subpage: Component { PagePlugins {} }
+		}
+		// END venus-plugin-manager-settings
+
+"#;
+
+const DASHBOARD_BLOCK: &str = r#"
+			// BEGIN venus-plugin-manager-dashboards
+			MbSubMenu {
+				description: qsTr("Plugin dashboards")
+				property VBusItem dashboardIds: VBusItem { bind: "com.victronenergy.pluginmanager/DashboardIds" }
+				show: dashboardIds.valid && dashboardIds.value !== ""
+				subpage: Component { PagePluginDashboards {} }
+			}
+			// END venus-plugin-manager-dashboards
+
+"#;
+
+const QML_FILES: &[(&str, &str)] = &[
+    (
+        "PagePlugins.qml",
+        include_str!("../../../ui/qml/PagePlugins.qml"),
+    ),
+    (
+        "PagePluginList.qml",
+        include_str!("../../../ui/qml/PagePluginList.qml"),
+    ),
+    (
+        "PagePluginDetails.qml",
+        include_str!("../../../ui/qml/PagePluginDetails.qml"),
+    ),
+    (
+        "PagePluginDashboards.qml",
+        include_str!("../../../ui/qml/PagePluginDashboards.qml"),
+    ),
+];
+
+#[derive(Debug, Error)]
+pub enum InstallerError {
+    #[error("unsupported target: {0}")]
+    Unsupported(String),
+    #[error("{path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not find the expected Venus OS v3.55 QML anchor in {0}")]
+    MissingAnchor(PathBuf),
+    #[error("incomplete Plugin Manager marker block in {0}")]
+    BrokenMarker(PathBuf),
+    #[error("service path is not owned by Plugin Manager: {0}")]
+    OwnershipConflict(PathBuf),
+    #[error("command failed: {command}: {message}")]
+    Command { command: String, message: String },
+    #[error("Plugin Manager D-Bus service did not become healthy")]
+    ManagerHealth,
+    #[error("Venus GUI did not become healthy")]
+    GuiHealth,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallConfig {
+    pub app_root: PathBuf,
+    pub gui_qml_root: PathBuf,
+    pub service_root: PathBuf,
+    pub manager_service: PathBuf,
+    pub rc_local: PathBuf,
+    pub version_file: PathBuf,
+}
+
+impl InstallConfig {
+    pub fn device() -> Self {
+        let app_root = PathBuf::from("/data/venus-gx-plugins");
+        Self {
+            manager_service: app_root.join("service"),
+            app_root,
+            gui_qml_root: PathBuf::from("/opt/victronenergy/gui/qml"),
+            service_root: PathBuf::from("/service"),
+            rc_local: PathBuf::from("/data/rc.local"),
+            version_file: PathBuf::from("/opt/victronenergy/version"),
+        }
+    }
+}
+
+pub fn install(config: InstallConfig) -> Result<(), InstallerError> {
+    validate_target(&config)?;
+    install_inner(&config)
+}
+
+fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
+    let binary = config.app_root.join("bin/venus-plugin-manager");
+    let run_script = config.manager_service.join("run");
+    let service_link = config.service_root.join("venus-plugin-manager");
+    let settings_page = config.gui_qml_root.join("PageSettings.qml");
+    let main_page = config.gui_qml_root.join("PageMain.qml");
+    let qml_paths: Vec<_> = QML_FILES
+        .iter()
+        .map(|(name, _)| config.gui_qml_root.join(name))
+        .collect();
+
+    let mut file_paths = vec![
+        binary.clone(),
+        run_script.clone(),
+        config.rc_local.clone(),
+        settings_page.clone(),
+        main_page.clone(),
+    ];
+    file_paths.extend(qml_paths.iter().cloned());
+    let backups = file_paths
+        .iter()
+        .map(|path| FileBackup::capture(path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let previous_link = capture_link(&service_link)?;
+
+    let result = (|| {
+        for directory in [
+            config.app_root.join("bin"),
+            config.app_root.join("backup"),
+            config.app_root.join("cache"),
+            config.app_root.join("config"),
+            config.app_root.join("downloads"),
+            config.app_root.join("services"),
+            config.manager_service.clone(),
+        ] {
+            create_dir_all(&directory)?;
+        }
+
+        backup_once(
+            &settings_page,
+            &config
+                .app_root
+                .join("backup/PageSettings.qml.v3.55.original"),
+        )?;
+        backup_once(
+            &main_page,
+            &config.app_root.join("backup/PageMain.qml.v3.55.original"),
+        )?;
+
+        let current_exe =
+            env::current_exe().map_err(|source| io_error("current executable", source))?;
+        let executable = fs::read(&current_exe).map_err(|source| io_error(&current_exe, source))?;
+        write_atomic(&binary, &executable, 0o755)?;
+        let run = format!(
+            "#!/bin/sh\nexec 2>&1\nexec {} serve\n",
+            shell_quote(&binary.to_string_lossy())
+        );
+        write_atomic(&run_script, run.as_bytes(), 0o755)?;
+
+        for ((_, contents), path) in QML_FILES.iter().zip(&qml_paths) {
+            write_atomic(path, contents.as_bytes(), 0o644)?;
+        }
+
+        patch_file(
+            &settings_page,
+            SETTINGS_BEGIN,
+            SETTINGS_END,
+            "\n\t\tMbSubMenu {\n\t\t\tdescription: \"Debug\"",
+            SETTINGS_BLOCK,
+        )?;
+        patch_file(
+            &main_page,
+            DASHBOARD_BEGIN,
+            DASHBOARD_END,
+            "\n\t\t\tMbSubMenu {\n\t\t\t\tdescription: qsTr(\"Settings\")",
+            DASHBOARD_BLOCK,
+        )?;
+
+        let rc = match fs::read_to_string(&config.rc_local) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => "#!/bin/sh\n".into(),
+            Err(source) => return Err(io_error(&config.rc_local, source)),
+        };
+        let rc_block = format!(
+            "\n{RC_BEGIN}\nif [ ! -e {} ] && [ ! -L {} ]; then\n\tln -s {} {}\nfi\n{RC_END}\n",
+            shell_quote(&service_link.to_string_lossy()),
+            shell_quote(&service_link.to_string_lossy()),
+            shell_quote(&config.manager_service.to_string_lossy()),
+            shell_quote(&service_link.to_string_lossy())
+        );
+        let rc = replace_or_append_block(&config.rc_local, &rc, RC_BEGIN, RC_END, &rc_block)?;
+        write_atomic(&config.rc_local, rc.as_bytes(), 0o755)?;
+
+        ensure_owned_link(&service_link, &config.manager_service)?;
+        if !wait_for_path(&service_link.join("supervise/ok"), Duration::from_secs(10)) {
+            return Err(InstallerError::Command {
+                command: format!("wait for {}", service_link.display()),
+                message: "runit did not discover the service".into(),
+            });
+        }
+        let action = if previous_link.is_some() { "-t" } else { "-u" };
+        run_command("svc", &[action, &service_link.to_string_lossy()])?;
+        if !wait_for_manager(Duration::from_secs(15)) {
+            return Err(InstallerError::ManagerHealth);
+        }
+        run_command("svc", &["-t", "/service/gui"])?;
+        if !wait_for_service("/service/gui", Duration::from_secs(15)) {
+            return Err(InstallerError::GuiHealth);
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = Command::new("svc")
+            .args(["-d", &service_link.to_string_lossy()])
+            .status();
+        for backup in backups.iter().rev() {
+            let _ = backup.restore();
+        }
+        let _ = restore_link(&service_link, previous_link.as_deref());
+        if previous_link.is_some() {
+            let _ = Command::new("svc")
+                .args(["-u", &service_link.to_string_lossy()])
+                .status();
+        }
+        let _ = Command::new("svc").args(["-t", "/service/gui"]).status();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn validate_target(config: &InstallConfig) -> Result<(), InstallerError> {
+    let version = fs::read_to_string(&config.version_file)
+        .map_err(|source| io_error(&config.version_file, source))?;
+    if !version.lines().any(|line| line.trim() == "v3.55") {
+        return Err(InstallerError::Unsupported(
+            "only Venus OS v3.55 is supported".into(),
+        ));
+    }
+    let output = Command::new("uname")
+        .arg("-m")
+        .output()
+        .map_err(|source| io_error("uname", source))?;
+    let architecture = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if !output.status.success() || architecture != "armv7l" {
+        return Err(InstallerError::Unsupported(format!(
+            "only armv7l is supported, found {architecture}"
+        )));
+    }
+    Ok(())
+}
+
+fn patch_file(
+    path: &Path,
+    begin: &str,
+    end: &str,
+    anchor: &str,
+    block: &str,
+) -> Result<(), InstallerError> {
+    let contents = fs::read_to_string(path).map_err(|source| io_error(path, source))?;
+    let patched = if contents.contains(begin) || contents.contains(end) {
+        replace_block(path, &contents, begin, end, block)?
+    } else {
+        let index = contents
+            .find(anchor)
+            .ok_or_else(|| InstallerError::MissingAnchor(path.to_path_buf()))?;
+        let mut patched = String::with_capacity(contents.len() + block.len());
+        patched.push_str(&contents[..index]);
+        patched.push_str(block);
+        patched.push_str(&contents[index..]);
+        patched
+    };
+    write_atomic(path, patched.as_bytes(), 0o644)
+}
+
+fn replace_or_append_block(
+    path: &Path,
+    contents: &str,
+    begin: &str,
+    end: &str,
+    block: &str,
+) -> Result<String, InstallerError> {
+    if contents.contains(begin) || contents.contains(end) {
+        replace_block(path, contents, begin, end, block)
+    } else {
+        Ok(format!("{}{block}", contents.trim_end()))
+    }
+}
+
+fn replace_block(
+    path: &Path,
+    contents: &str,
+    begin: &str,
+    end: &str,
+    replacement: &str,
+) -> Result<String, InstallerError> {
+    let start = contents
+        .find(begin)
+        .ok_or_else(|| InstallerError::BrokenMarker(path.to_path_buf()))?;
+    let end_start = contents[start..]
+        .find(end)
+        .map(|offset| start + offset)
+        .ok_or_else(|| InstallerError::BrokenMarker(path.to_path_buf()))?;
+    let end_index = end_start + end.len();
+    let line_start = contents[..start].rfind('\n').map_or(0, |index| index + 1);
+    let line_end = contents[end_index..]
+        .find('\n')
+        .map_or(contents.len(), |offset| end_index + offset + 1);
+    Ok(format!(
+        "{}{}{}",
+        &contents[..line_start],
+        replacement,
+        &contents[line_end..]
+    ))
+}
+
+fn backup_once(source: &Path, destination: &Path) -> Result<(), InstallerError> {
+    if destination.exists() {
+        return Ok(());
+    }
+    let contents = fs::read(source).map_err(|source_error| io_error(source, source_error))?;
+    write_atomic(destination, &contents, 0o644)
+}
+
+fn ensure_owned_link(link: &Path, target: &Path) -> Result<(), InstallerError> {
+    create_dir_all(link.parent().unwrap_or_else(|| Path::new("/")))?;
+    match fs::symlink_metadata(link) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let existing = fs::read_link(link).map_err(|source| io_error(link, source))?;
+            if existing == target {
+                return Ok(());
+            }
+            return Err(InstallerError::OwnershipConflict(link.to_path_buf()));
+        }
+        Ok(_) => return Err(InstallerError::OwnershipConflict(link.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error(link, source)),
+    }
+    symlink(target, link).map_err(|source| io_error(link, source))
+}
+
+fn capture_link(path: &Path) -> Result<Option<PathBuf>, InstallerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => fs::read_link(path)
+            .map(Some)
+            .map_err(|source| io_error(path, source)),
+        Ok(_) => Err(InstallerError::OwnershipConflict(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(io_error(path, source)),
+    }
+}
+
+fn restore_link(path: &Path, target: Option<&Path>) -> Result<(), InstallerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            fs::remove_file(path).map_err(|source| io_error(path, source))?;
+        }
+        Ok(_) => return Err(InstallerError::OwnershipConflict(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error(path, source)),
+    }
+    if let Some(target) = target {
+        symlink(target, path).map_err(|source| io_error(path, source))?;
+    }
+    Ok(())
+}
+
+fn wait_for_manager(timeout: Duration) -> bool {
+    let Ok(connection) = Connection::system() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let connected = Proxy::new(&connection, SERVICE_NAME, "/Connected", BUS_ITEM_INTERFACE)
+            .and_then(|proxy| proxy.call::<_, _, OwnedValue>("GetValue", &()))
+            .ok()
+            .and_then(|value| i32::try_from(value).ok())
+            == Some(1);
+        if connected {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+fn wait_for_service(path: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if Command::new("svstat")
+            .arg(path)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| String::from_utf8_lossy(&output.stdout).contains("up"))
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+fn run_command(program: &str, arguments: &[&str]) -> Result<(), InstallerError> {
+    let output = Command::new(program)
+        .args(arguments)
+        .output()
+        .map_err(|source| io_error(program, source))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(InstallerError::Command {
+            command: format!("{} {}", program, arguments.join(" ")),
+            message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
+    }
+}
+
+fn create_dir_all(path: &Path) -> Result<(), InstallerError> {
+    fs::create_dir_all(path).map_err(|source| io_error(path, source))
+}
+
+fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), InstallerError> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|source| io_error(&temp, source))?;
+    file.write_all(contents)
+        .map_err(|source| io_error(&temp, source))?;
+    file.set_permissions(fs::Permissions::from_mode(mode))
+        .map_err(|source| io_error(&temp, source))?;
+    file.sync_all().map_err(|source| io_error(&temp, source))?;
+    fs::rename(&temp, path).map_err(|source| io_error(path, source))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn io_error(path: impl Into<PathBuf>, source: io::Error) -> InstallerError {
+    InstallerError::Io {
+        path: path.into(),
+        source,
+    }
+}
+
+struct FileBackup {
+    path: PathBuf,
+    contents: Option<Vec<u8>>,
+    mode: u32,
+}
+
+impl FileBackup {
+    fn capture(path: &Path) -> Result<Self, InstallerError> {
+        match fs::read(path) {
+            Ok(contents) => {
+                let mode = fs::metadata(path)
+                    .map_err(|source| io_error(path, source))?
+                    .permissions()
+                    .mode();
+                Ok(Self {
+                    path: path.to_path_buf(),
+                    contents: Some(contents),
+                    mode,
+                })
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self {
+                path: path.to_path_buf(),
+                contents: None,
+                mode: 0,
+            }),
+            Err(source) => Err(io_error(path, source)),
+        }
+    }
+
+    fn restore(&self) -> Result<(), InstallerError> {
+        if let Some(contents) = &self.contents {
+            write_atomic(&self.path, contents, self.mode)
+        } else {
+            match fs::remove_file(&self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(source) => Err(io_error(&self.path, source)),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn patches_realistic_qml_once_without_removing_other_changes() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("PageSettings.qml");
+        fs::write(
+            &path,
+            "MbPage {\n\tmodel: VisibleItemModel {\n\t\t// custom entry\n\t\tMbSubMenu {\n\t\t\tdescription: \"Debug\"\n\t\t}\n\t}\n}\n",
+        )
+        .unwrap();
+        patch_file(
+            &path,
+            SETTINGS_BEGIN,
+            SETTINGS_END,
+            "\n\t\tMbSubMenu {\n\t\t\tdescription: \"Debug\"",
+            SETTINGS_BLOCK,
+        )
+        .unwrap();
+        patch_file(
+            &path,
+            SETTINGS_BEGIN,
+            SETTINGS_END,
+            "\n\t\tMbSubMenu {\n\t\t\tdescription: \"Debug\"",
+            SETTINGS_BLOCK,
+        )
+        .unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(contents.matches(SETTINGS_BEGIN).count(), 1);
+        assert_eq!(contents.matches(SETTINGS_END).count(), 1);
+        assert!(contents.contains("// custom entry"));
+    }
+
+    #[test]
+    fn rejects_an_incomplete_marker_block() {
+        let error = replace_block(Path::new("x"), "begin only", "begin", "end", "new").unwrap_err();
+        assert!(matches!(error, InstallerError::BrokenMarker(_)));
+    }
+
+    #[test]
+    fn shell_quotes_paths_without_execution() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+}

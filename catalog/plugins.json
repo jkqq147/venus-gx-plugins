@@ -1,4 +1,18 @@
 {
   "schema": 1,
-  "plugins": []
+  "plugins": [
+    {
+      "id": "tpms",
+      "name": "TPMS",
+      "version": "0.1.0",
+      "package": {
+        "url": "https://github.com/jkqq147/venus-gx-plugins/releases/download/v0.1.0/tpms-0.1.0.vplugin",
+        "sha256": "4bdbe29e5c6bccea520f62f20be66371020a7fc15eff666734a04faa6fa003eb",
+        "signature": {
+          "key_id": "release-2026-01",
+          "ed25519": "am0GS1tiOWJV3KLC9ZrpECQ6n51uf9vW+D2alkFVllcUAqdEVfzqj019epFZccc4lgEro6HI4Sj4SmeuCHLUDQ=="
+        }
+      }
+    }
+  ]
 }

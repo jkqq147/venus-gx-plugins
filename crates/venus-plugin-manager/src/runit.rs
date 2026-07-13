@@ -1,0 +1,425 @@
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+use plugin_manager_core::{InstalledPlugin, Runtime, ServiceState};
+use thiserror::Error;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Error)]
+pub enum RuntimeError {
+    #[error("{path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("runit command failed: {command} {path}: {message}")]
+    Command {
+        command: String,
+        path: PathBuf,
+        message: String,
+    },
+    #[error("runit path is not owned by Plugin Manager: {0}")]
+    OwnershipConflict(PathBuf),
+}
+
+pub trait PluginRuntime {
+    fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
+    fn remove_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
+    fn observe(&self, plugin: &InstalledPlugin) -> Result<ServiceState, RuntimeError>;
+    fn start(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
+    fn stop(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
+}
+
+pub trait RunitController: Send + Sync {
+    fn control(&self, action: &str, service: &Path) -> Result<(), RuntimeError>;
+    fn status(&self, service: &Path) -> Result<String, RuntimeError>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SystemRunitController;
+
+impl RunitController for SystemRunitController {
+    fn control(&self, action: &str, service: &Path) -> Result<(), RuntimeError> {
+        let output = Command::new("svc")
+            .arg(action)
+            .arg(service)
+            .output()
+            .map_err(|source| io_error(PathBuf::from("svc"), source))?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(RuntimeError::Command {
+                command: format!("svc {action}"),
+                path: service.to_path_buf(),
+                message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            })
+        }
+    }
+
+    fn status(&self, service: &Path) -> Result<String, RuntimeError> {
+        let output = Command::new("svstat")
+            .arg(service)
+            .output()
+            .map_err(|source| io_error(PathBuf::from("svstat"), source))?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(RuntimeError::Command {
+                command: "svstat".into(),
+                path: service.to_path_buf(),
+                message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            })
+        }
+    }
+}
+
+pub struct RunitRuntime<C = SystemRunitController> {
+    state_root: PathBuf,
+    config_root: PathBuf,
+    definitions_root: PathBuf,
+    service_root: PathBuf,
+    controller: C,
+}
+
+impl RunitRuntime<SystemRunitController> {
+    pub fn new(
+        state_root: impl Into<PathBuf>,
+        config_root: impl Into<PathBuf>,
+        definitions_root: impl Into<PathBuf>,
+        service_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self::with_controller(
+            state_root,
+            config_root,
+            definitions_root,
+            service_root,
+            SystemRunitController,
+        )
+    }
+}
+
+impl<C: RunitController> RunitRuntime<C> {
+    pub fn with_controller(
+        state_root: impl Into<PathBuf>,
+        config_root: impl Into<PathBuf>,
+        definitions_root: impl Into<PathBuf>,
+        service_root: impl Into<PathBuf>,
+        controller: C,
+    ) -> Self {
+        Self {
+            state_root: state_root.into(),
+            config_root: config_root.into(),
+            definitions_root: definitions_root.into(),
+            service_root: service_root.into(),
+            controller,
+        }
+    }
+
+    fn definition(&self, id: &str) -> PathBuf {
+        self.definitions_root.join(id)
+    }
+
+    fn service_link(&self, id: &str) -> PathBuf {
+        self.service_root.join(format!("venus-plugin-{id}"))
+    }
+
+    fn ensure_owned_link(&self, id: &str) -> Result<(), RuntimeError> {
+        let definition = self.definition(id);
+        let link = self.service_link(id);
+        fs::create_dir_all(&self.service_root)
+            .map_err(|source| io_error(self.service_root.clone(), source))?;
+        match fs::symlink_metadata(&link) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target =
+                    fs::read_link(&link).map_err(|source| io_error(link.clone(), source))?;
+                if target == definition {
+                    return Ok(());
+                }
+                fs::remove_file(&link).map_err(|source| io_error(link.clone(), source))?;
+            }
+            Ok(_) => return Err(RuntimeError::OwnershipConflict(link)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(io_error(link, source)),
+        }
+        std::os::unix::fs::symlink(&definition, &link).map_err(|source| io_error(link, source))
+    }
+
+    fn remove_owned_link(&self, id: &str) -> Result<(), RuntimeError> {
+        let definition = self.definition(id);
+        let link = self.service_link(id);
+        match fs::symlink_metadata(&link) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target =
+                    fs::read_link(&link).map_err(|source| io_error(link.clone(), source))?;
+                if target != definition {
+                    return Err(RuntimeError::OwnershipConflict(link));
+                }
+                fs::remove_file(&link).map_err(|source| io_error(link, source))
+            }
+            Ok(_) => Err(RuntimeError::OwnershipConflict(link)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(io_error(link, source)),
+        }
+    }
+}
+
+impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
+    fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        let Runtime::NativeService { executable } = &plugin.manifest.runtime else {
+            return self.remove_definition(plugin);
+        };
+        let definition = self.definition(&plugin.manifest.id);
+        let is_new = !definition.exists();
+        fs::create_dir_all(&definition).map_err(|source| io_error(definition.clone(), source))?;
+        let config = self.config_root.join(&plugin.manifest.id);
+        fs::create_dir_all(&config).map_err(|source| io_error(config.clone(), source))?;
+        let binary = self.state_root.join(&plugin.install_path).join(executable);
+        let script = format!(
+            "#!/bin/sh\nset -eu\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\nexec {}\n",
+            shell_quote(&plugin.manifest.id),
+            shell_quote(&config.to_string_lossy()),
+            shell_quote(&binary.to_string_lossy())
+        );
+        write_atomic(&definition.join("run"), script.as_bytes(), 0o755)?;
+        if is_new {
+            write_atomic(&definition.join("down"), b"", 0o644)?;
+        }
+        self.ensure_owned_link(&plugin.manifest.id)
+    }
+
+    fn remove_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        if matches!(plugin.manifest.runtime, Runtime::QmlOnly) {
+            return Ok(());
+        }
+        let link = self.service_link(&plugin.manifest.id);
+        if fs::symlink_metadata(&link).is_ok() {
+            let _ = self.controller.control("-dx", &link);
+        }
+        self.remove_owned_link(&plugin.manifest.id)?;
+        let definition = self.definition(&plugin.manifest.id);
+        match fs::remove_dir_all(&definition) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(io_error(definition, source)),
+        }
+    }
+
+    fn observe(&self, plugin: &InstalledPlugin) -> Result<ServiceState, RuntimeError> {
+        if matches!(plugin.manifest.runtime, Runtime::QmlOnly) {
+            return Ok(ServiceState::NotApplicable);
+        }
+        let link = self.service_link(&plugin.manifest.id);
+        if fs::symlink_metadata(&link).is_err() {
+            return Ok(ServiceState::Failed);
+        }
+        let Ok(status) = self.controller.status(&link) else {
+            return Ok(ServiceState::Failed);
+        };
+        if status.starts_with("up ") || status.contains(": up ") {
+            Ok(ServiceState::Running)
+        } else if status.starts_with("down ") || status.contains(": down ") {
+            Ok(ServiceState::Stopped)
+        } else {
+            Ok(ServiceState::Failed)
+        }
+    }
+
+    fn start(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        if matches!(plugin.manifest.runtime, Runtime::QmlOnly) {
+            return Ok(());
+        }
+        let down = self.definition(&plugin.manifest.id).join("down");
+        match fs::remove_file(&down) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(io_error(down, source)),
+        }
+        self.controller
+            .control("-u", &self.service_link(&plugin.manifest.id))
+    }
+
+    fn stop(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        if matches!(plugin.manifest.runtime, Runtime::QmlOnly) {
+            return Ok(());
+        }
+        let definition = self.definition(&plugin.manifest.id);
+        fs::create_dir_all(&definition).map_err(|source| io_error(definition.clone(), source))?;
+        write_atomic(&definition.join("down"), b"", 0o644)?;
+        let link = self.service_link(&plugin.manifest.id);
+        if fs::symlink_metadata(&link).is_err() {
+            return Ok(());
+        }
+        self.controller.control("-d", &link)
+    }
+}
+
+fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), RuntimeError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| RuntimeError::OwnershipConflict(path.to_path_buf()))?;
+    fs::create_dir_all(parent).map_err(|source| io_error(parent.to_path_buf(), source))?;
+    let temp = parent.join(format!(".tmp-{}", next_suffix()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temp)
+        .map_err(|source| io_error(temp.clone(), source))?;
+    let result = file
+        .write_all(contents)
+        .map_err(|source| io_error(temp.clone(), source))
+        .and_then(|_| {
+            file.sync_all()
+                .map_err(|source| io_error(temp.clone(), source))
+        })
+        .and_then(|_| {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&temp, fs::Permissions::from_mode(mode))
+                .map_err(|source| io_error(temp.clone(), source))
+        })
+        .and_then(|_| {
+            fs::rename(&temp, path).map_err(|source| io_error(path.to_path_buf(), source))
+        });
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn next_suffix() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn io_error(path: PathBuf, source: io::Error) -> RuntimeError {
+    RuntimeError::Io { path, source }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use plugin_manager_core::{PluginManifest, PluginSettings, PluginUi, SCHEMA_VERSION};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct FakeController {
+        calls: Mutex<Vec<String>>,
+        status: Mutex<String>,
+    }
+
+    impl RunitController for FakeController {
+        fn control(&self, action: &str, service: &Path) -> Result<(), RuntimeError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("{action} {}", service.display()));
+            Ok(())
+        }
+
+        fn status(&self, _service: &Path) -> Result<String, RuntimeError> {
+            Ok(self.status.lock().unwrap().clone())
+        }
+    }
+
+    fn installed() -> InstalledPlugin {
+        InstalledPlugin {
+            manifest: PluginManifest {
+                schema: SCHEMA_VERSION,
+                id: "tpms".into(),
+                name: "TPMS".into(),
+                version: "0.1.0".into(),
+                runtime: Runtime::NativeService {
+                    executable: "bin/tpms".into(),
+                },
+                settings: PluginSettings {
+                    enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
+                },
+                ui: PluginUi::default(),
+            },
+            package_sha256: "0".repeat(64),
+            install_path: format!("plugins/tpms/{}", "0".repeat(64)),
+        }
+    }
+
+    #[test]
+    fn creates_owned_service_disabled_by_default() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let plugin = installed();
+
+        runtime.sync_definition(&plugin).unwrap();
+
+        let definition = temp.path().join("definitions/tpms");
+        assert!(definition.join("down").is_file());
+        let script = fs::read_to_string(definition.join("run")).unwrap();
+        assert!(script.contains("state/plugins/tpms"));
+        assert_eq!(
+            fs::read_link(temp.path().join("service/venus-plugin-tpms")).unwrap(),
+            definition
+        );
+    }
+
+    #[test]
+    fn start_and_stop_keep_runit_default_in_sync() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let plugin = installed();
+        runtime.sync_definition(&plugin).unwrap();
+
+        runtime.start(&plugin).unwrap();
+        assert!(!temp.path().join("definitions/tpms/down").exists());
+        runtime.stop(&plugin).unwrap();
+        assert!(temp.path().join("definitions/tpms/down").is_file());
+        assert_eq!(runtime.controller.calls.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parses_runit_status_and_removes_owned_definition() {
+        let temp = TempDir::new().unwrap();
+        let controller = FakeController::default();
+        *controller.status.lock().unwrap() =
+            "/service/venus-plugin-tpms: up (pid 7) 2 seconds".into();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            controller,
+        );
+        let plugin = installed();
+        runtime.sync_definition(&plugin).unwrap();
+
+        assert_eq!(runtime.observe(&plugin).unwrap(), ServiceState::Running);
+        runtime.remove_definition(&plugin).unwrap();
+        assert!(!temp.path().join("definitions/tpms").exists());
+        assert!(!temp.path().join("service/venus-plugin-tpms").exists());
+    }
+}
