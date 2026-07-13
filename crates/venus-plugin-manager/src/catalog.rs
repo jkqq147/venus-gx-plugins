@@ -1,9 +1,14 @@
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Arc,
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use plugin_manager_core::{Catalog, CatalogEntry};
@@ -13,6 +18,11 @@ use crate::signing::{CatalogVerifier, SigningError};
 
 const MAX_CATALOG_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
+const DISTRIBUTION_HOST: &str = "venus-gx-plugins.pages.dev";
+const DISTRIBUTION_ORIGIN: &str = "https://venus-gx-plugins.pages.dev";
+const OPENSSL_PATH: &str = "/usr/bin/openssl";
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
@@ -57,55 +67,231 @@ impl HttpTransport for SystemHttpTransport {
         limit: u64,
     ) -> Result<u64, CatalogError> {
         require_https(url)?;
-        let mut child = Command::new("curl")
+        let request_target = distribution_request_target(url)?;
+        let mut child = Command::new(OPENSSL_PATH)
             .args([
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--fail",
-                "--silent",
-                "--show-error",
-                "--location",
-                "--connect-timeout",
-                "20",
-                "--max-time",
-                "120",
+                "s_client",
+                "-quiet",
+                "-verify_return_error",
+                "-verify_hostname",
+                DISTRIBUTION_HOST,
+                "-CApath",
+                "/etc/ssl/certs",
+                "-connect",
+                "venus-gx-plugins.pages.dev:443",
+                "-servername",
+                DISTRIBUTION_HOST,
             ])
-            .arg(url)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| CatalogError::Http {
-                url: url.to_owned(),
-                message: format!("could not start curl: {error}"),
-            })?;
-        let stdout = child.stdout.take().ok_or_else(|| CatalogError::Http {
-            url: url.to_owned(),
-            message: "curl stdout was not available".into(),
-        })?;
-        let copied = match copy_limited(stdout, destination, url, limit) {
-            Ok(copied) => copied,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
+            .map_err(|error| http_error(url, format!("could not start OpenSSL: {error}")))?;
+        let deadline = ProcessDeadline::new(child.id(), DOWNLOAD_TIMEOUT);
+        let request = format!(
+            "GET {request_target} HTTP/1.1\r\nHost: {DISTRIBUTION_HOST}\r\nUser-Agent: venus-plugin-manager/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+            env!("CARGO_PKG_VERSION")
+        );
+        let send_result = child
+            .stdin
+            .take()
+            .ok_or_else(|| http_error(url, "OpenSSL stdin was not available"))
+            .and_then(|mut stdin| {
+                stdin
+                    .write_all(request.as_bytes())
+                    .map_err(|error| http_error(url, error.to_string()))
+            });
+        if let Err(error) = send_result {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| http_error(url, "OpenSSL stdout was not available"))?;
+        let mut reader = BufReader::new(stdout);
+        let result = read_distribution_response(&mut reader, destination, url, limit);
+        drop(reader);
+        if result.is_err() {
+            let _ = child.kill();
+        }
         let output = child
             .wait_with_output()
-            .map_err(|error| CatalogError::Http {
-                url: url.to_owned(),
-                message: format!("could not wait for curl: {error}"),
-            })?;
+            .map_err(|error| http_error(url, format!("could not wait for OpenSSL: {error}")))?;
+        let timed_out = deadline.timed_out();
+        drop(deadline);
+        if timed_out {
+            return Err(http_error(url, "HTTPS request timed out after 120 seconds"));
+        }
+        let copied = result?;
         if output.status.success() {
             Ok(copied)
         } else {
-            Err(CatalogError::Http {
-                url: url.to_owned(),
-                message: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            })
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            Err(http_error(
+                url,
+                if message.is_empty() {
+                    format!("OpenSSL exited with {}", output.status)
+                } else {
+                    message
+                },
+            ))
         }
+    }
+}
+
+struct ProcessDeadline {
+    cancel: Option<mpsc::Sender<()>>,
+    worker: Option<JoinHandle<()>>,
+    timed_out: Arc<AtomicBool>,
+}
+
+impl ProcessDeadline {
+    fn new(pid: u32, duration: Duration) -> Self {
+        let (cancel, receiver) = mpsc::channel();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let worker_timed_out = Arc::clone(&timed_out);
+        let worker = thread::spawn(move || {
+            if receiver.recv_timeout(duration) == Err(mpsc::RecvTimeoutError::Timeout) {
+                worker_timed_out.store(true, Ordering::Relaxed);
+                let _ = Command::new("/bin/kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status();
+            }
+        });
+        Self {
+            cancel: Some(cancel),
+            worker: Some(worker),
+            timed_out,
+        }
+    }
+
+    fn timed_out(&self) -> bool {
+        self.timed_out.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for ProcessDeadline {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn distribution_request_target(url: &str) -> Result<String, CatalogError> {
+    let suffix = url
+        .strip_prefix(DISTRIBUTION_ORIGIN)
+        .ok_or_else(|| http_error(url, "URL is outside the fixed distribution origin"))?;
+    if suffix
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || suffix.contains('#')
+    {
+        return Err(http_error(url, "invalid distribution URL"));
+    }
+    if suffix.is_empty() {
+        Ok("/".into())
+    } else if suffix.starts_with('?') {
+        Ok(format!("/{suffix}"))
+    } else if suffix.starts_with('/') && !suffix.starts_with("//") {
+        Ok(suffix.to_owned())
+    } else {
+        Err(http_error(
+            url,
+            "URL is outside the fixed distribution origin",
+        ))
+    }
+}
+
+fn read_distribution_response(
+    reader: &mut impl BufRead,
+    destination: &mut dyn Write,
+    url: &str,
+    limit: u64,
+) -> Result<u64, CatalogError> {
+    let mut used = 0_usize;
+    let status = read_http_line(reader, url, &mut used)?;
+    let valid_status = status
+        .strip_prefix("HTTP/1.1 ")
+        .or_else(|| status.strip_prefix("HTTP/1.0 "))
+        .is_some_and(|value| value.starts_with("200 ") || value == "200");
+    if !valid_status {
+        return Err(http_error(url, format!("unexpected HTTP status: {status}")));
+    }
+    let mut content_length = None;
+    loop {
+        let line = read_http_line(reader, url, &mut used)?;
+        if line.is_empty() {
+            break;
+        }
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| http_error(url, "invalid HTTP response header"))?;
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(http_error(
+                url,
+                "distribution response must not use Transfer-Encoding",
+            ));
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            let parsed = value
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| http_error(url, "invalid HTTP Content-Length"))?;
+            if content_length.is_some_and(|existing| existing != parsed) {
+                return Err(http_error(url, "conflicting HTTP Content-Length values"));
+            }
+            content_length = Some(parsed);
+        }
+    }
+    let length = content_length
+        .ok_or_else(|| http_error(url, "distribution response has no Content-Length"))?;
+    if length > limit {
+        return Err(CatalogError::TooLarge {
+            url: url.to_owned(),
+            limit,
+        });
+    }
+    let copied = copy_limited(reader.take(length), destination, url, limit)?;
+    if copied != length {
+        return Err(http_error(url, "HTTP response body ended early"));
+    }
+    Ok(copied)
+}
+
+fn read_http_line(
+    reader: &mut impl BufRead,
+    url: &str,
+    used: &mut usize,
+) -> Result<String, CatalogError> {
+    let mut line = Vec::new();
+    let count = reader
+        .read_until(b'\n', &mut line)
+        .map_err(|error| http_error(url, error.to_string()))?;
+    *used += count;
+    if count == 0 || *used > MAX_HTTP_HEADER_BYTES || !line.ends_with(b"\n") {
+        return Err(http_error(
+            url,
+            "invalid or oversized HTTP response headers",
+        ));
+    }
+    line.pop();
+    if line.ends_with(b"\r") {
+        line.pop();
+    }
+    String::from_utf8(line).map_err(|_| http_error(url, "HTTP response headers are not UTF-8"))
+}
+
+fn http_error(url: &str, message: impl Into<String>) -> CatalogError {
+    CatalogError::Http {
+        url: url.to_owned(),
+        message: message.into(),
     }
 }
 
@@ -160,6 +346,7 @@ impl<T: HttpTransport> CatalogClient<T> {
     }
 
     pub fn load_cached(&self) -> Result<Option<Catalog>, CatalogError> {
+        cleanup_temporary_downloads(&self.downloads_dir)?;
         if !self.cache_path.exists() {
             return Ok(None);
         }
@@ -316,6 +503,29 @@ fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), CatalogError> {
     result
 }
 
+pub(crate) fn cleanup_temporary_downloads(directory: &Path) -> Result<(), CatalogError> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(io_error(directory.to_path_buf(), source)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|source| io_error(directory.to_path_buf(), source))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with('.') || !name.contains(".tmp-") {
+            continue;
+        }
+        let path = entry.path();
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|source| io_error(path.clone(), source))?;
+        if metadata.file_type().is_file() {
+            fs::remove_file(&path).map_err(|source| io_error(path, source))?;
+        }
+    }
+    Ok(())
+}
+
 fn next_suffix() -> String {
     format!(
         "{}-{}",
@@ -404,6 +614,83 @@ mod tests {
     fn verifier() -> CatalogVerifier {
         let public = SigningKey::from_bytes(&[7; 32]).verifying_key();
         CatalogVerifier::from_base64(TEST_KEY_ID, &STANDARD.encode(public.as_bytes())).unwrap()
+    }
+
+    #[test]
+    fn distribution_transport_accepts_only_the_fixed_origin() {
+        assert_eq!(
+            distribution_request_target("https://venus-gx-plugins.pages.dev/catalog.json").unwrap(),
+            "/catalog.json"
+        );
+        assert_eq!(
+            distribution_request_target("https://venus-gx-plugins.pages.dev?version=1").unwrap(),
+            "/?version=1"
+        );
+
+        for url in [
+            "http://venus-gx-plugins.pages.dev/catalog.json",
+            "https://venus-gx-plugins.pages.dev.evil.example/catalog.json",
+            "https://example.com/catalog.json",
+            "https://venus-gx-plugins.pages.dev//evil.example/catalog.json",
+            "https://venus-gx-plugins.pages.dev/catalog.json#fragment",
+            "https://venus-gx-plugins.pages.dev/catalog.json\r\nInjected: true",
+        ] {
+            assert!(distribution_request_target(url).is_err(), "accepted {url}");
+        }
+    }
+
+    #[test]
+    fn distribution_response_streams_an_exact_content_length() {
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npackage".as_slice();
+        let mut destination = Vec::new();
+
+        let copied = read_distribution_response(
+            &mut response,
+            &mut destination,
+            "https://venus-gx-plugins.pages.dev/package.vplugin",
+            16,
+        )
+        .unwrap();
+
+        assert_eq!(copied, 7);
+        assert_eq!(destination, b"package");
+    }
+
+    #[test]
+    fn distribution_response_rejects_ambiguous_framing() {
+        for response in [
+            "HTTP/1.1 200 OK\r\n\r\npackage",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\npackage\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nContent-Length: 8\r\n\r\npackage",
+        ] {
+            let mut reader = response.as_bytes();
+            assert!(read_distribution_response(
+                &mut reader,
+                &mut Vec::new(),
+                "https://venus-gx-plugins.pages.dev/package.vplugin",
+                16,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn distribution_response_enforces_status_size_and_completeness() {
+        let cases = [
+            "HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 17\r\n\r\nseventeen-bytes!",
+            "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nshort",
+        ];
+        for response in cases {
+            let mut reader = response.as_bytes();
+            assert!(read_distribution_response(
+                &mut reader,
+                &mut Vec::new(),
+                "https://venus-gx-plugins.pages.dev/package.vplugin",
+                16,
+            )
+            .is_err());
+        }
     }
 
     #[test]
@@ -504,5 +791,26 @@ mod tests {
             client.refresh(),
             Err(CatalogError::InsecureUrl(_))
         ));
+    }
+
+    #[test]
+    fn startup_cleanup_removes_only_owned_temporary_downloads() {
+        let temp = TempDir::new().unwrap();
+        let downloads = temp.path().join("downloads");
+        fs::create_dir(&downloads).unwrap();
+        fs::write(downloads.join(".manager-update.tmp-1-0"), b"partial").unwrap();
+        fs::write(downloads.join(".tpms-0.1.0.tmp-1-1"), b"partial").unwrap();
+        fs::write(downloads.join("tpms-0.1.0.vplugin"), b"complete").unwrap();
+        let outside = temp.path().join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, downloads.join(".linked.tmp-1")).unwrap();
+
+        cleanup_temporary_downloads(&downloads).unwrap();
+
+        assert!(!downloads.join(".manager-update.tmp-1-0").exists());
+        assert!(!downloads.join(".tpms-0.1.0.tmp-1-1").exists());
+        assert!(downloads.join("tpms-0.1.0.vplugin").exists());
+        assert!(downloads.join(".linked.tmp-1").is_symlink());
+        assert_eq!(fs::read(outside).unwrap(), b"keep");
     }
 }

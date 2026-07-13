@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    catalog::{CatalogError, HttpTransport, SystemHttpTransport},
+    catalog::{cleanup_temporary_downloads, CatalogError, HttpTransport, SystemHttpTransport},
     signing::{CatalogVerifier, SigningError},
 };
 
@@ -112,6 +112,7 @@ impl<T: HttpTransport> ManagerUpdater<T> {
     }
 
     pub fn initialize(&mut self) -> Result<ManagerUpdateSnapshot, UpdateError> {
+        cleanup_temporary_downloads(&self.downloads_dir)?;
         if self.cache_path.exists() {
             let contents = fs::read(&self.cache_path)
                 .map_err(|source| io_error(self.cache_path.clone(), source))?;

@@ -8,6 +8,8 @@
 
 CCGX 不直接访问 GitHub。插件 Catalog 与 Manager 发布元数据分别经过 Ed25519 校验，下载文件再经过 SHA-256 校验；Cloudflare 只负责静态分发，不成为新的信任来源。
 
+设备端只连接上述固定域名，使用 Venus OS v3.55 自带的 OpenSSL 和系统 CA 目录完成 SNI、主机名与证书链校验。响应必须是带明确 `Content-Length` 的 HTTP 200，文件按大小上限直接流式写入；不接受重定向、分块编码或其他下载源。每次请求的硬超时为 120 秒。
+
 发布 GitHub Release 后，Actions 会收集所有正式 Release 中的 Manager 和 `.vplugin` 文件，并把完整静态目录部署到 Pages。Manager 的公开文件名统一增加 `.bin` 后缀以适配 Pages 静态路由；版本路径保持不变，历史版本不会被覆盖。
 
 缓存响应头位于 `infra/cloudflare/_headers`，静态目录由 `scripts/build-pages-dist.sh` 生成。自动部署只使用 GitHub Secret `CLOUDFLARE_PAGES_API_TOKEN`，其权限限定为当前账号的 Cloudflare Pages Edit。
