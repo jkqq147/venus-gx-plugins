@@ -121,12 +121,25 @@ fn apply_manager_update(expected_version: &str) -> Result<(), String> {
         .unwrap_or_else(|| {
             std::path::PathBuf::from(venus_plugin_manager::service::DEFAULT_DOWNLOAD_ROOT)
         });
-    if executable.parent() != Some(download_root.as_path()) {
-        return Err("manager update must run from the managed downloads directory".into());
-    }
+    require_managed_update_location(&executable, &download_root)?;
     venus_plugin_manager::installer::install(config).map_err(|error| error.to_string())?;
     fs::remove_file(&executable).map_err(|error| format!("{}: {error}", executable.display()))?;
     Ok(())
+}
+
+fn require_managed_update_location(executable: &Path, download_root: &Path) -> Result<(), String> {
+    let executable_parent = executable
+        .parent()
+        .ok_or_else(|| "manager update executable has no parent directory".to_owned())?;
+    let executable_parent = fs::canonicalize(executable_parent)
+        .map_err(|error| format!("{}: {error}", executable_parent.display()))?;
+    let download_root = fs::canonicalize(download_root)
+        .map_err(|error| format!("{}: {error}", download_root.display()))?;
+    if executable_parent == download_root {
+        Ok(())
+    } else {
+        Err("manager update must run from the managed downloads directory".into())
+    }
 }
 
 fn validate_manifest(path: &Path) -> Result<(), String> {
@@ -219,4 +232,25 @@ fn uninstall(root: &Path, id: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     println!("{id} 已从本地 Registry 和插件目录卸载");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn managed_update_location_accepts_a_symlinked_tmpfs_root() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("volatile/downloads");
+        fs::create_dir_all(&real).unwrap();
+        let alias = temp.path().join("downloads");
+        symlink(&real, &alias).unwrap();
+
+        assert!(require_managed_update_location(&real.join("manager"), &alias).is_ok());
+        assert!(require_managed_update_location(&temp.path().join("manager"), &alias).is_err());
+    }
 }
