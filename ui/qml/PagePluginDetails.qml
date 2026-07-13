@@ -18,6 +18,7 @@ MbPage {
 	property VBusItem settingsPage: VBusItem { bind: root.pluginRoot + "/SettingsPage" }
 	property VBusItem installCommand: VBusItem { bind: root.pluginRoot + "/Install" }
 	property VBusItem uninstallCommand: VBusItem { bind: root.pluginRoot + "/Uninstall" }
+	property VBusItem purgeCommand: VBusItem { bind: root.pluginRoot + "/Purge" }
 	property VBusItem busy: VBusItem { bind: root.service + "/Busy" }
 
 	title: pluginName.valid ? pluginName.value : pluginId
@@ -92,15 +93,33 @@ MbPage {
 		MbItemOptions {
 			id: uninstallConfirmation
 			description: qsTr("Confirm uninstall")
-			message: qsTr("Uninstall this plugin? Its configuration will be kept.")
+			message: qsTr("Choose whether to keep this plugin's configuration.")
 			show: false
 			possibleValues: [
 				MbOption { description: qsTr("Cancel"); value: 0 },
-				MbOption { description: qsTr("Uninstall"); value: 1 }
+				MbOption { description: qsTr("Uninstall, keep configuration"); value: 1 },
+				MbOption { description: qsTr("Delete plugin and configuration"); value: 2 }
 			]
 			onOptionSelected: {
 				if (newValue === 1)
 					uninstallCommand.setValue(1)
+				else if (newValue === 2)
+					purgeConfirmation.edit()
+			}
+		}
+
+		MbItemOptions {
+			id: purgeConfirmation
+			description: qsTr("Confirm permanent deletion")
+			message: qsTr("Delete this plugin and all of its configuration? This cannot be undone.")
+			show: false
+			possibleValues: [
+				MbOption { description: qsTr("Cancel"); value: 0 },
+				MbOption { description: qsTr("Delete permanently"); value: 1 }
+			]
+			onOptionSelected: {
+				if (newValue === 1)
+					purgeCommand.setValue(1)
 			}
 		}
 

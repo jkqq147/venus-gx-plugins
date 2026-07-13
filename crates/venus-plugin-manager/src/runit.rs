@@ -1,6 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
@@ -32,6 +33,7 @@ pub enum RuntimeError {
 pub trait PluginRuntime {
     fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
     fn remove_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
+    fn purge_config(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
     fn observe(&self, plugin: &InstalledPlugin) -> Result<ServiceState, RuntimeError>;
     fn start(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
     fn stop(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError>;
@@ -130,6 +132,24 @@ impl<C: RunitController> RunitRuntime<C> {
         self.service_root.join(format!("venus-plugin-{id}"))
     }
 
+    fn ensure_config_directory(&self, id: &str) -> Result<PathBuf, RuntimeError> {
+        fs::create_dir_all(&self.config_root)
+            .map_err(|source| io_error(self.config_root.clone(), source))?;
+        require_owned_directory(&self.config_root)?;
+
+        let config = self.config_root.join(id);
+        match fs::create_dir(&config) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                require_owned_directory(&config)?;
+            }
+            Err(source) => return Err(io_error(config, source)),
+        }
+        fs::set_permissions(&config, fs::Permissions::from_mode(0o700))
+            .map_err(|source| io_error(config.clone(), source))?;
+        Ok(config)
+    }
+
     fn ensure_owned_link(&self, id: &str) -> Result<(), RuntimeError> {
         let definition = self.definition(id);
         let link = self.service_link(id);
@@ -178,8 +198,7 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
         let definition = self.definition(&plugin.manifest.id);
         let is_new = !definition.exists();
         fs::create_dir_all(&definition).map_err(|source| io_error(definition.clone(), source))?;
-        let config = self.config_root.join(&plugin.manifest.id);
-        fs::create_dir_all(&config).map_err(|source| io_error(config.clone(), source))?;
+        let config = self.ensure_config_directory(&plugin.manifest.id)?;
         let binary = self.state_root.join(&plugin.install_path).join(executable);
         let script = format!(
             "#!/bin/sh\nset -eu\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\nexec {}\n",
@@ -209,6 +228,22 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(source) => Err(io_error(definition, source)),
         }
+    }
+
+    fn purge_config(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        match fs::symlink_metadata(&self.config_root) {
+            Ok(_) => require_owned_directory(&self.config_root)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => return Err(io_error(self.config_root.clone(), source)),
+        }
+
+        let config = self.config_root.join(&plugin.manifest.id);
+        match fs::symlink_metadata(&config) {
+            Ok(_) => require_owned_directory(&config)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => return Err(io_error(config, source)),
+        }
+        fs::remove_dir_all(&config).map_err(|source| io_error(config, source))
     }
 
     fn observe(&self, plugin: &InstalledPlugin) -> Result<ServiceState, RuntimeError> {
@@ -279,7 +314,6 @@ fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), RuntimeEr
                 .map_err(|source| io_error(temp.clone(), source))
         })
         .and_then(|_| {
-            use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&temp, fs::Permissions::from_mode(mode))
                 .map_err(|source| io_error(temp.clone(), source))
         })
@@ -306,6 +340,16 @@ fn next_suffix() -> String {
 
 fn io_error(path: PathBuf, source: io::Error) -> RuntimeError {
     RuntimeError::Io { path, source }
+}
+
+fn require_owned_directory(path: &Path) -> Result<(), RuntimeError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|source| io_error(path.to_path_buf(), source))?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        Ok(())
+    } else {
+        Err(RuntimeError::OwnershipConflict(path.to_path_buf()))
+    }
 }
 
 #[cfg(test)]
@@ -375,6 +419,15 @@ mod tests {
         assert!(definition.join("down").is_file());
         let script = fs::read_to_string(definition.join("run")).unwrap();
         assert!(script.contains("state/plugins/tpms"));
+        assert!(script.contains("VENUS_PLUGIN_CONFIG_DIR"));
+        assert_eq!(
+            fs::metadata(temp.path().join("config/tpms"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
         assert_eq!(
             fs::read_link(temp.path().join("service/venus-plugin-tpms")).unwrap(),
             definition
@@ -421,5 +474,47 @@ mod tests {
         runtime.remove_definition(&plugin).unwrap();
         assert!(!temp.path().join("definitions/tpms").exists());
         assert!(!temp.path().join("service/venus-plugin-tpms").exists());
+    }
+
+    #[test]
+    fn uninstall_keeps_config_until_explicit_purge() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let plugin = installed();
+        runtime.sync_definition(&plugin).unwrap();
+        let state = temp.path().join("config/tpms/state.json");
+        fs::write(&state, b"{}").unwrap();
+
+        runtime.remove_definition(&plugin).unwrap();
+        assert_eq!(fs::read(&state).unwrap(), b"{}");
+
+        runtime.purge_config(&plugin).unwrap();
+        assert!(!temp.path().join("config/tpms").exists());
+    }
+
+    #[test]
+    fn purge_rejects_a_symlinked_config_directory() {
+        let temp = TempDir::new().unwrap();
+        let external = TempDir::new().unwrap();
+        let config_root = temp.path().join("config");
+        fs::create_dir(&config_root).unwrap();
+        std::os::unix::fs::symlink(external.path(), config_root.join("tpms")).unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            &config_root,
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+
+        let error = runtime.purge_config(&installed()).unwrap_err();
+        assert!(matches!(error, RuntimeError::OwnershipConflict(_)));
+        assert!(external.path().exists());
     }
 }

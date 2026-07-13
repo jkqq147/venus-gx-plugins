@@ -52,6 +52,32 @@ import "/opt/victronenergy/gui/qml"
 
 Manifest 和 Catalog 按 schema 严格解析；未知字段会被拒绝，字段扩展必须通过新的 schema 版本明确演进。
 
+## 持久配置
+
+插件包与用户配置严格分离。Manager 根据插件 ID 为每个 `native-service` 创建唯一的持久配置目录：
+
+```text
+/data/venus-gx-plugins/config/<plugin-id>/
+```
+
+服务启动时通过以下环境变量获得目录，不允许在 manifest 中声明其他配置绝对路径：
+
+```text
+VENUS_PLUGIN_ID=<plugin-id>
+VENUS_PLUGIN_CONFIG_DIR=/data/venus-gx-plugins/config/<plugin-id>
+```
+
+配置目录由 Manager 创建并强制使用 `0700` 权限。插件只能把需要跨升级、重装或重启保留的数据写入该目录，并应使用临时文件加原子重命名更新配置。包内 payload、runit 服务目录和临时下载目录都不能作为持久配置位置。
+
+Manager 不解析配置内容，也不保存配置 schema。配置格式的兼容和升级由插件自身负责。例如 TPMS 使用 `config/tpms/state.json`，Rathole 使用 `config/rathole/client.toml`。
+
+卸载提供两种明确语义：
+
+- `卸载并保留配置`：停止服务并删除 Registry、payload、QML 引用、服务定义和 Enabled 设置，保留 `config/<plugin-id>/`；重新安装后可继续使用原配置，但默认保持关闭。
+- `彻底卸载`：完成同样的卸载流程，并在二次确认后删除整个 `config/<plugin-id>/`。Manager 只删除由合法插件 ID 推导出的真实目录，拒绝符号链接和其他越界路径。
+
+插件升级永远不能删除或覆盖持久配置。
+
 ## 安全校验
 
 安装事务在修改当前 Registry 前完成以下校验：

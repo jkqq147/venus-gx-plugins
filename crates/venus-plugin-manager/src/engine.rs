@@ -219,7 +219,7 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
         Ok(())
     }
 
-    pub fn uninstall(&mut self, id: &str) -> Result<(), EngineError> {
+    pub fn uninstall(&mut self, id: &str, purge_config: bool) -> Result<(), EngineError> {
         let plugin = self
             .registry
             .load()?
@@ -233,6 +233,9 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
         self.runtime.remove_definition(&plugin)?;
         self.registry.uninstall(id)?;
         self.settings.remove_enabled(&plugin.manifest)?;
+        if purge_config {
+            self.runtime.purge_config(&plugin)?;
+        }
         self.reconciled.remove(id);
         Ok(())
     }
@@ -397,7 +400,12 @@ fn lifecycle_text(state: LifecycleState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, io::Write, path::Path, sync::Mutex};
+    use std::{
+        collections::{HashMap, HashSet},
+        io::Write,
+        path::Path,
+        sync::Mutex,
+    };
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
@@ -452,15 +460,25 @@ mod tests {
     #[derive(Default)]
     struct FakeRuntime {
         running: Mutex<HashMap<String, bool>>,
+        configs: Mutex<HashSet<String>>,
     }
 
     impl PluginRuntime for FakeRuntime {
-        fn sync_definition(&self, _plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+        fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+            self.configs
+                .lock()
+                .unwrap()
+                .insert(plugin.manifest.id.clone());
             Ok(())
         }
 
         fn remove_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
             self.running.lock().unwrap().remove(&plugin.manifest.id);
+            Ok(())
+        }
+
+        fn purge_config(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+            self.configs.lock().unwrap().remove(&plugin.manifest.id);
             Ok(())
         }
 
@@ -654,9 +672,14 @@ mod tests {
         assert!(enabled.enabled);
         assert_eq!(enabled.lifecycle, LifecycleState::Enabled);
 
-        engine.uninstall("tpms").unwrap();
+        engine.uninstall("tpms", false).unwrap();
+        assert!(engine.runtime.configs.lock().unwrap().contains("tpms"));
         let available = engine.snapshot().unwrap().plugins.remove(0);
         assert!(!available.installed);
         assert!(available.available);
+
+        assert_eq!(engine.install("tpms").unwrap(), InstallOutcome::Installed);
+        engine.uninstall("tpms", true).unwrap();
+        assert!(!engine.runtime.configs.lock().unwrap().contains("tpms"));
     }
 }

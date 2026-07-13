@@ -21,7 +21,7 @@ pub enum ManagerCommand {
     SetGuiReady(bool),
     Install(String),
     SetEnabled(String, bool),
-    Uninstall(String),
+    Uninstall { id: String, purge_config: bool },
 }
 
 pub struct ManagerPublisher {
@@ -261,7 +261,26 @@ impl ManagerPublisher {
                     return 2;
                 }
                 sender
-                    .send(ManagerCommand::Uninstall(id.clone()))
+                    .send(ManagerCommand::Uninstall {
+                        id: id.clone(),
+                        purge_config: false,
+                    })
+                    .map_or(2, |_| 0)
+            }),
+        )?;
+        let id = plugin.id.clone();
+        let sender = self.commands.clone();
+        self.add(
+            &format!("{root}/Purge"),
+            BusItem::writable_i32(0, move |value| {
+                if value != 1 {
+                    return 2;
+                }
+                sender
+                    .send(ManagerCommand::Uninstall {
+                        id: id.clone(),
+                        purge_config: true,
+                    })
                     .map_or(2, |_| 0)
             }),
         )
@@ -294,7 +313,8 @@ impl ManagerPublisher {
             self.i32(&format!("{root}/{suffix}"), i32::from(value))?;
         }
         self.i32(&format!("{root}/Install"), 0)?;
-        self.i32(&format!("{root}/Uninstall"), 0)
+        self.i32(&format!("{root}/Uninstall"), 0)?;
+        self.i32(&format!("{root}/Purge"), 0)
     }
 
     fn add(&mut self, path: &str, item: BusItem) -> zbus::Result<()> {

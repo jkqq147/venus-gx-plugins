@@ -137,7 +137,9 @@ fn execute_command(
         ManagerCommand::SetEnabled(id, enabled) => engine
             .set_enabled(&id, enabled)
             .map_err(|error| error.to_string()),
-        ManagerCommand::Uninstall(id) => engine.uninstall(&id).map_err(|error| error.to_string()),
+        ManagerCommand::Uninstall { id, purge_config } => engine
+            .uninstall(&id, purge_config)
+            .map_err(|error| error.to_string()),
     };
     let last_error = result
         .as_ref()
