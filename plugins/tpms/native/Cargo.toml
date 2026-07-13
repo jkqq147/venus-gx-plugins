@@ -1,6 +1,6 @@
 [package]
 name = "venus-tpms-plugin"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 description = "Venus GX Plugins adapter for the native TPMS service"
@@ -11,4 +11,4 @@ name = "venus-tpms-ble"
 path = "src/main.rs"
 
 [dependencies]
-tpms-core = { package = "venus-tpms-ble", git = "https://github.com/jkqq147/venus-tpms-ble.git", rev = "af21ad8d846b454b01ec26efafbabef8dc8a4a60" }
+tpms-core = { package = "venus-tpms-ble", git = "https://github.com/jkqq147/venus-tpms-ble.git", rev = "dbb46a53808dd09c792acb28b4e7e7ed0e9adf1c" }

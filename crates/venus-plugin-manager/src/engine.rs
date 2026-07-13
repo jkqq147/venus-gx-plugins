@@ -18,29 +18,11 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CatalogState {
-    Empty,
-    Cached(usize),
-    Fresh(usize),
-    Error(String),
-}
-
-impl CatalogState {
-    pub fn text(&self) -> String {
-        match self {
-            Self::Empty => "尚未刷新".into(),
-            Self::Cached(count) => format!("离线缓存：{count} 个插件"),
-            Self::Fresh(count) => format!("已更新：{count} 个插件"),
-            Self::Error(message) => format!("刷新失败：{message}"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSnapshot {
     pub id: String,
     pub path_key: String,
     pub name: String,
+    pub description: String,
     pub installed: bool,
     pub available: bool,
     pub enabled: bool,
@@ -49,7 +31,6 @@ pub struct PluginSnapshot {
     pub has_update: bool,
     pub service_state: ServiceState,
     pub lifecycle: LifecycleState,
-    pub status: String,
     pub error: String,
     pub settings_page: String,
     pub dashboard_component: String,
@@ -58,7 +39,7 @@ pub struct PluginSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagerSnapshot {
-    pub catalog_state: CatalogState,
+    pub catalog_loaded: bool,
     pub plugins: Vec<PluginSnapshot>,
 }
 
@@ -90,7 +71,7 @@ pub struct ManagerEngine<S, R, T> {
     runtime: R,
     catalog_client: CatalogClient<T>,
     catalog: Catalog,
-    catalog_state: CatalogState,
+    catalog_loaded: bool,
     reconciled: BTreeMap<String, ReconciledState>,
 }
 
@@ -110,20 +91,15 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
                 schema: plugin_manager_core::CATALOG_SCHEMA_VERSION,
                 plugins: Vec::new(),
             },
-            catalog_state: CatalogState::Empty,
+            catalog_loaded: false,
             reconciled: BTreeMap::new(),
         }
     }
 
     pub fn initialize(&mut self) -> Result<ManagerSnapshot, EngineError> {
-        self.registry.initialize()?;
-        match self.catalog_client.load_cached() {
-            Ok(Some(catalog)) => {
-                self.catalog_state = CatalogState::Cached(catalog.plugins.len());
-                self.catalog = catalog;
-            }
-            Ok(None) => self.catalog_state = CatalogState::Empty,
-            Err(error) => self.catalog_state = CatalogState::Error(error.to_string()),
+        let registry = self.registry.initialize()?;
+        for plugin in registry.plugins.values() {
+            self.settings.ensure_enabled(&plugin.manifest)?;
         }
         self.reconcile_all()?;
         self.snapshot()
@@ -132,11 +108,10 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
     pub fn refresh_catalog(&mut self) -> Result<ManagerSnapshot, EngineError> {
         match self.catalog_client.refresh() {
             Ok(catalog) => {
-                self.catalog_state = CatalogState::Fresh(catalog.plugins.len());
                 self.catalog = catalog;
+                self.catalog_loaded = true;
             }
             Err(error) => {
-                self.catalog_state = CatalogState::Error(error.to_string());
                 return Err(error.into());
             }
         }
@@ -252,7 +227,6 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
     }
 
     pub fn snapshot(&mut self) -> Result<ManagerSnapshot, EngineError> {
-        self.reconcile_all()?;
         let registry = self.registry.load()?;
         let catalog_by_id: BTreeMap<_, _> = self
             .catalog
@@ -282,13 +256,6 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
             let lifecycle = state
                 .map(|state| state.lifecycle)
                 .unwrap_or(LifecycleState::Disabled);
-            let status = if !error.is_empty() {
-                format!("错误：{error}")
-            } else if installed.is_none() {
-                "可安装".into()
-            } else {
-                lifecycle_text(lifecycle).into()
-            };
             let payload_root =
                 installed.map(|plugin| self.registry.root().join(&plugin.install_path));
             plugins.push(PluginSnapshot {
@@ -298,6 +265,10 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
                     .map(|entry| entry.name.clone())
                     .or_else(|| installed.map(|plugin| plugin.manifest.name.clone()))
                     .unwrap_or_else(|| id.clone()),
+                description: catalog
+                    .map(|entry| entry.description.clone())
+                    .or_else(|| installed.map(|plugin| plugin.manifest.description.clone()))
+                    .unwrap_or_default(),
                 installed: installed.is_some(),
                 available: catalog.is_some(),
                 enabled: state.is_some_and(|state| state.enabled),
@@ -310,7 +281,6 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
                     .map(|state| state.service)
                     .unwrap_or(ServiceState::NotApplicable),
                 lifecycle,
-                status,
                 error,
                 settings_page: installed
                     .and_then(|plugin| plugin.manifest.ui.settings_page.as_ref())
@@ -329,7 +299,7 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
             });
         }
         Ok(ManagerSnapshot {
-            catalog_state: self.catalog_state.clone(),
+            catalog_loaded: self.catalog_loaded,
             plugins,
         })
     }
@@ -352,7 +322,7 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
     }
 
     fn reconcile_plugin(&self, plugin: &InstalledPlugin) -> Result<ReconciledState, EngineError> {
-        let enabled = self.settings.ensure_enabled(&plugin.manifest)?;
+        let enabled = self.settings.read_enabled(&plugin.manifest)?;
         self.runtime.sync_definition(plugin)?;
         let service = self.runtime.observe(plugin)?;
         let ui_visible = enabled && !plugin.manifest.ui.is_empty();
@@ -391,15 +361,6 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
         if was_enabled {
             let _ = self.runtime.start(plugin);
         }
-    }
-}
-
-fn lifecycle_text(state: LifecycleState) -> &'static str {
-    match state {
-        LifecycleState::Disabled => "已关闭",
-        LifecycleState::Enabled => "已启用",
-        LifecycleState::Converging => "正在同步",
-        LifecycleState::Degraded => "运行异常",
     }
 }
 
@@ -466,10 +427,12 @@ mod tests {
     struct FakeRuntime {
         running: Mutex<HashMap<String, bool>>,
         configs: Mutex<HashSet<String>>,
+        sync_count: Mutex<usize>,
     }
 
     impl PluginRuntime for FakeRuntime {
         fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
+            *self.sync_count.lock().unwrap() += 1;
             self.configs
                 .lock()
                 .unwrap()
@@ -562,9 +525,11 @@ mod tests {
             schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             runtime: Runtime::NativeService {
                 executable: "bin/tpms".into(),
+                arguments: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -637,6 +602,7 @@ mod tests {
             plugins: vec![CatalogEntry {
                 id: "tpms".into(),
                 name: "TPMS".into(),
+                description: "Bluetooth tire pressure monitoring".into(),
                 version: "0.1.0".into(),
                 package: signed_package_source(package_url, &sha256),
             }],
@@ -654,7 +620,6 @@ mod tests {
             .insert(package_url.into(), package);
         let client = CatalogClient::with_transport_and_verifier(
             catalog_url,
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
@@ -669,9 +634,11 @@ mod tests {
         assert!(engine.initialize().unwrap().plugins.is_empty());
         assert_eq!(engine.refresh_catalog().unwrap().plugins.len(), 1);
         assert_eq!(engine.install("tpms").unwrap(), InstallOutcome::Installed);
+        let sync_count = *engine.runtime.sync_count.lock().unwrap();
         let installed = engine.snapshot().unwrap().plugins.remove(0);
         assert!(installed.installed);
         assert!(!installed.enabled);
+        assert_eq!(*engine.runtime.sync_count.lock().unwrap(), sync_count);
 
         engine.set_enabled("tpms", true).unwrap();
         let enabled = engine.snapshot().unwrap().plugins.remove(0);

@@ -3,10 +3,17 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CATALOG_SCHEMA_VERSION: u32 = 1;
-pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const CATALOG_SCHEMA_VERSION: u32 = 2;
+pub const MANIFEST_SCHEMA_VERSION: u32 = 4;
 const LEGACY_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const DEVICE_LIST_MANIFEST_SCHEMA_VERSION: u32 = 2;
+const DESCRIPTION_MANIFEST_SCHEMA_VERSION: u32 = 3;
+const ARGUMENTS_MANIFEST_SCHEMA_VERSION: u32 = 4;
+const LEGACY_CATALOG_SCHEMA_VERSION: u32 = 1;
 const MAX_DEVICE_LIST_VALUES: usize = 4;
+const MAX_DESCRIPTION_CHARS: usize = 160;
+const MAX_RUNTIME_ARGUMENTS: usize = 16;
+const MAX_RUNTIME_ARGUMENT_CHARS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,6 +21,8 @@ pub struct PluginManifest {
     pub schema: u32,
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub runtime: Runtime,
     pub settings: PluginSettings,
@@ -24,7 +33,11 @@ pub struct PluginManifest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Runtime {
-    NativeService { executable: String },
+    NativeService {
+        executable: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        arguments: Vec<String>,
+    },
     QmlOnly,
 }
 
@@ -69,6 +82,8 @@ pub struct Catalog {
 pub struct CatalogEntry {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub description: String,
     pub version: String,
     pub package: PackageSource,
 }
@@ -96,17 +111,25 @@ pub enum ContractError {
     InvalidId(String),
     #[error("plugin name must not be empty")]
     EmptyName,
+    #[error("plugin description must contain between 1 and {MAX_DESCRIPTION_CHARS} characters")]
+    InvalidDescription,
     #[error("invalid semantic version: {0}")]
     InvalidVersion(String),
     #[error("native executable must be below bin/: {0}")]
     InvalidExecutable(String),
+    #[error("native runtime arguments require manifest schema {ARGUMENTS_MANIFEST_SCHEMA_VERSION} or newer")]
+    RuntimeArgumentsRequireCurrentSchema,
+    #[error("native runtime must declare at most {MAX_RUNTIME_ARGUMENTS} arguments")]
+    TooManyRuntimeArguments,
+    #[error("invalid native runtime argument")]
+    InvalidRuntimeArgument,
     #[error("qml-only plugin must declare at least one QML component")]
     MissingQmlUi,
     #[error("enabled setting must be {expected}, got {actual}")]
     InvalidEnabledPath { expected: String, actual: String },
     #[error("invalid QML asset path: {0}")]
     InvalidQmlPath(String),
-    #[error("device_list requires manifest schema {MANIFEST_SCHEMA_VERSION}")]
+    #[error("device_list requires manifest schema {DEVICE_LIST_MANIFEST_SCHEMA_VERSION} or newer")]
     DeviceListRequiresCurrentSchema,
     #[error("device_list requires ui.settings_page")]
     DeviceListWithoutSettingsPage,
@@ -135,11 +158,30 @@ impl PluginManifest {
         if self.name.trim().is_empty() {
             return Err(ContractError::EmptyName);
         }
+        if self.schema >= DESCRIPTION_MANIFEST_SCHEMA_VERSION || !self.description.is_empty() {
+            validate_description(&self.description)?;
+        }
         validate_version(&self.version)?;
 
-        if let Runtime::NativeService { executable } = &self.runtime {
+        if let Runtime::NativeService {
+            executable,
+            arguments,
+        } = &self.runtime
+        {
             if !is_safe_relative_path(executable, "bin/") {
                 return Err(ContractError::InvalidExecutable(executable.clone()));
+            }
+            if self.schema < ARGUMENTS_MANIFEST_SCHEMA_VERSION && !arguments.is_empty() {
+                return Err(ContractError::RuntimeArgumentsRequireCurrentSchema);
+            }
+            if arguments.len() > MAX_RUNTIME_ARGUMENTS {
+                return Err(ContractError::TooManyRuntimeArguments);
+            }
+            if arguments.iter().any(|argument| {
+                argument.chars().count() > MAX_RUNTIME_ARGUMENT_CHARS
+                    || argument.chars().any(char::is_control)
+            }) {
+                return Err(ContractError::InvalidRuntimeArgument);
             }
         } else if self.ui.is_empty() {
             return Err(ContractError::MissingQmlUi);
@@ -163,7 +205,7 @@ impl PluginManifest {
         }
 
         if let Some(device_list) = &self.ui.device_list {
-            if self.schema != MANIFEST_SCHEMA_VERSION {
+            if self.schema < DEVICE_LIST_MANIFEST_SCHEMA_VERSION {
                 return Err(ContractError::DeviceListRequiresCurrentSchema);
             }
             if self.ui.settings_page.is_none() {
@@ -203,6 +245,9 @@ impl Catalog {
             if plugin.name.trim().is_empty() {
                 return Err(ContractError::EmptyName);
             }
+            if self.schema == CATALOG_SCHEMA_VERSION || !plugin.description.is_empty() {
+                validate_description(&plugin.description)?;
+            }
             validate_version(&plugin.version)?;
             if !plugin.package.url.starts_with("https://") {
                 return Err(ContractError::InsecurePackageUrl(
@@ -226,7 +271,7 @@ impl Catalog {
 }
 
 fn validate_catalog_schema(schema: u32) -> Result<(), ContractError> {
-    if schema == CATALOG_SCHEMA_VERSION {
+    if schema == LEGACY_CATALOG_SCHEMA_VERSION || schema == CATALOG_SCHEMA_VERSION {
         Ok(())
     } else {
         Err(ContractError::UnsupportedSchema(schema))
@@ -234,10 +279,22 @@ fn validate_catalog_schema(schema: u32) -> Result<(), ContractError> {
 }
 
 fn validate_manifest_schema(schema: u32) -> Result<(), ContractError> {
-    if schema == LEGACY_MANIFEST_SCHEMA_VERSION || schema == MANIFEST_SCHEMA_VERSION {
+    if (LEGACY_MANIFEST_SCHEMA_VERSION..=MANIFEST_SCHEMA_VERSION).contains(&schema) {
         Ok(())
     } else {
         Err(ContractError::UnsupportedSchema(schema))
+    }
+}
+
+fn validate_description(description: &str) -> Result<(), ContractError> {
+    let trimmed = description.trim();
+    if trimmed.is_empty()
+        || trimmed.chars().count() > MAX_DESCRIPTION_CHARS
+        || trimmed.chars().any(char::is_control)
+    {
+        Err(ContractError::InvalidDescription)
+    } else {
+        Ok(())
     }
 }
 
@@ -306,7 +363,10 @@ fn is_safe_bus_item_path(path: &str) -> bool {
 }
 
 pub(crate) fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn valid_key_id(value: &str) -> bool {
@@ -336,9 +396,11 @@ mod tests {
             schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             runtime: Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
+                arguments: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -357,10 +419,29 @@ mod tests {
     }
 
     #[test]
+    fn current_manifest_requires_a_short_description() {
+        let mut manifest = manifest();
+        manifest.description.clear();
+        assert_eq!(manifest.validate(), Err(ContractError::InvalidDescription));
+
+        manifest.description = "x".repeat(MAX_DESCRIPTION_CHARS + 1);
+        assert_eq!(manifest.validate(), Err(ContractError::InvalidDescription));
+    }
+
+    #[test]
+    fn legacy_manifest_may_omit_description() {
+        let mut manifest = manifest();
+        manifest.schema = DEVICE_LIST_MANIFEST_SCHEMA_VERSION;
+        manifest.description.clear();
+        assert_eq!(manifest.validate(), Ok(()));
+    }
+
+    #[test]
     fn rejects_a_path_outside_the_plugin_package() {
         let mut manifest = manifest();
         manifest.runtime = Runtime::NativeService {
             executable: "bin/../service".into(),
+            arguments: Vec::new(),
         };
         assert_eq!(
             manifest.validate(),
@@ -374,6 +455,31 @@ mod tests {
         manifest.runtime = Runtime::QmlOnly;
         manifest.ui = PluginUi::default();
         assert_eq!(manifest.validate(), Err(ContractError::MissingQmlUi));
+    }
+
+    #[test]
+    fn runtime_arguments_are_literal_and_schema_gated() {
+        let mut manifest = manifest();
+        manifest.runtime = Runtime::NativeService {
+            executable: "bin/rathole".into(),
+            arguments: vec!["--client".into(), "client.toml".into()],
+        };
+        assert_eq!(manifest.validate(), Ok(()));
+
+        manifest.schema = DESCRIPTION_MANIFEST_SCHEMA_VERSION;
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::RuntimeArgumentsRequireCurrentSchema)
+        );
+
+        manifest.schema = MANIFEST_SCHEMA_VERSION;
+        if let Runtime::NativeService { arguments, .. } = &mut manifest.runtime {
+            arguments[1] = "bad\nargument".into();
+        }
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::InvalidRuntimeArgument)
+        );
     }
 
     #[test]
@@ -478,6 +584,7 @@ mod tests {
         let entry = CatalogEntry {
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             package: PackageSource {
                 url: "https://example.com/tpms.vplugin".into(),
@@ -496,5 +603,31 @@ mod tests {
             catalog.validate(),
             Err(ContractError::DuplicateCatalogId("tpms".into()))
         );
+    }
+
+    #[test]
+    fn current_catalog_requires_descriptions_but_legacy_catalog_does_not() {
+        let entry = CatalogEntry {
+            id: "tpms".into(),
+            name: "TPMS".into(),
+            description: String::new(),
+            version: "0.1.0".into(),
+            package: PackageSource {
+                url: "https://example.com/tpms.vplugin".into(),
+                sha256: "0".repeat(64),
+                signature: PackageSignature {
+                    key_id: "test-key".into(),
+                    ed25519: format!("{}==", "A".repeat(86)),
+                },
+            },
+        };
+        let mut catalog = Catalog {
+            schema: CATALOG_SCHEMA_VERSION,
+            plugins: vec![entry],
+        };
+        assert_eq!(catalog.validate(), Err(ContractError::InvalidDescription));
+
+        catalog.schema = LEGACY_CATALOG_SCHEMA_VERSION;
+        assert_eq!(catalog.validate(), Ok(()));
     }
 }

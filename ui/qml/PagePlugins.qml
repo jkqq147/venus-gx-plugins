@@ -8,25 +8,12 @@ MbPage {
 	property VBusItem busy: VBusItem { bind: root.service + "/Busy" }
 	property VBusItem error: VBusItem { bind: root.service + "/LastError" }
 	property VBusItem refresh: VBusItem { bind: root.service + "/Refresh" }
+	property VBusItem catalogLoaded: VBusItem { bind: root.service + "/CatalogLoaded" }
 	property VBusItem managerAvailableVersion: VBusItem { bind: root.service + "/Manager/AvailableVersion" }
 	property VBusItem managerHasUpdate: VBusItem { bind: root.service + "/Manager/HasUpdate" }
 	property VBusItem managerUpdate: VBusItem { bind: root.service + "/Manager/Update" }
 
 	model: VisibleItemModel {
-		MbItemValue {
-			description: qsTr("Plugin Manager")
-			item.bind: root.service + "/Manager/InstalledVersion"
-		}
-
-		MbOK {
-			description: qsTr("Update Plugin Manager")
-			value: busy.value === 1 ? qsTr("Working...") : managerAvailableVersion.value
-			show: managerHasUpdate.value === 1
-			editable: busy.value !== 1
-			enabled: busy.value !== 1
-			onClicked: managerUpdate.setValue(1)
-		}
-
 		MbSubMenu {
 			description: qsTr("Installed plugins")
 			item.bind: root.service + "/InstalledCount"
@@ -34,22 +21,30 @@ MbPage {
 		}
 
 		MbSubMenu {
-			description: qsTr("Available plugins")
+			description: qsTr("Get plugins")
 			item.bind: root.service + "/AvailableCount"
 			subpage: Component { PagePluginList { mode: "available" } }
 		}
 
-		MbItemValue {
-			description: qsTr("Catalog")
-			item.bind: root.service + "/CatalogStatus"
-		}
-
 		MbOK {
-			description: qsTr("Refresh")
-			value: busy.value === 1 ? qsTr("Working...") : qsTr("Press to refresh")
+			description: qsTr("Check for updates")
+			value: busy.value === 1
+				? qsTr("Checking...")
+				: catalogLoaded.value === 1
+					? qsTr("Checked")
+					: qsTr("Press to check")
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
 			onClicked: refresh.setValue(1)
+		}
+
+		MbOK {
+			description: qsTr("Update Plugin Manager")
+			value: busy.value === 1 ? qsTr("Updating...") : managerAvailableVersion.value
+			show: managerHasUpdate.value === 1
+			editable: busy.value !== 1
+			enabled: busy.value !== 1
+			onClicked: managerUpdate.setValue(1)
 		}
 
 		MbItemText {

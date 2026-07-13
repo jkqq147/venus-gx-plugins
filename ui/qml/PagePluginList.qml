@@ -9,14 +9,14 @@ MbPage {
 		bind: root.service + (root.mode === "installed" ? "/InstalledIds" : "/AvailableIds")
 	}
 	property variant pluginIds: ids.valid && ids.value !== "" ? String(ids.value).split(",") : []
-	title: mode === "installed" ? qsTr("Installed plugins") : qsTr("Available plugins")
+	title: mode === "installed" ? qsTr("Installed plugins") : qsTr("Get plugins")
 
 	model: VisualModels {
 		VisibleItemModel {
 			MbItemText {
 				text: root.mode === "installed"
 					? qsTr("No plugins installed")
-					: qsTr("No plugins available. Use Refresh to update the catalog.")
+					: qsTr("No plugin information. Go back and check for updates.")
 				wrapMode: Text.WordWrap
 				show: root.pluginIds.length === 0
 			}
@@ -31,9 +31,21 @@ MbPage {
 				property string pluginKey: pluginId.replace(/-/g, "_")
 				property string pluginRoot: root.service + "/Plugins/" + pluginKey
 				property VBusItem pluginName: VBusItem { bind: pluginEntry.pluginRoot + "/Name" }
+				property VBusItem pluginDescription: VBusItem { bind: pluginEntry.pluginRoot + "/Description" }
+				property VBusItem lifecycle: VBusItem { bind: pluginEntry.pluginRoot + "/Lifecycle" }
+				property VBusItem hasUpdate: VBusItem { bind: pluginEntry.pluginRoot + "/HasUpdate" }
+				property string summary: root.mode === "available"
+					? (pluginDescription.valid ? String(pluginDescription.value) : "")
+					: hasUpdate.value === 1
+						? qsTr("Update available")
+						: lifecycle.value === "enabled"
+							? qsTr("On")
+							: lifecycle.value === "degraded"
+								? qsTr("Needs attention")
+								: qsTr("Off")
 
 				description: pluginName.valid ? pluginName.value : pluginId
-				item.bind: pluginRoot + "/Status"
+				item: VBusItem { value: pluginEntry.summary }
 				subpage: Component {
 					PagePluginDetails { pluginId: pluginEntry.pluginId }
 				}

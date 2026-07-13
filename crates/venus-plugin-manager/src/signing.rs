@@ -181,6 +181,7 @@ mod tests {
         let entry = CatalogEntry {
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             package: PackageSource {
                 url: "https://example.com/tpms.vplugin".into(),

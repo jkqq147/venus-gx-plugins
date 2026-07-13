@@ -145,8 +145,15 @@ impl<C: RunitController> RunitRuntime<C> {
             }
             Err(source) => return Err(io_error(config, source)),
         }
-        fs::set_permissions(&config, fs::Permissions::from_mode(0o700))
-            .map_err(|source| io_error(config.clone(), source))?;
+        let mode = fs::symlink_metadata(&config)
+            .map_err(|source| io_error(config.clone(), source))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o700 {
+            fs::set_permissions(&config, fs::Permissions::from_mode(0o700))
+                .map_err(|source| io_error(config.clone(), source))?;
+        }
         Ok(config)
     }
 
@@ -192,7 +199,11 @@ impl<C: RunitController> RunitRuntime<C> {
 
 impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
     fn sync_definition(&self, plugin: &InstalledPlugin) -> Result<(), RuntimeError> {
-        let Runtime::NativeService { executable } = &plugin.manifest.runtime else {
+        let Runtime::NativeService {
+            executable,
+            arguments,
+        } = &plugin.manifest.runtime
+        else {
             return self.remove_definition(plugin);
         };
         let definition = self.definition(&plugin.manifest.id);
@@ -200,13 +211,25 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
         fs::create_dir_all(&definition).map_err(|source| io_error(definition.clone(), source))?;
         let config = self.ensure_config_directory(&plugin.manifest.id)?;
         let binary = self.state_root.join(&plugin.install_path).join(executable);
+        let arguments = arguments
+            .iter()
+            .map(|argument| shell_quote(argument))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let arguments = if arguments.is_empty() {
+            String::new()
+        } else {
+            format!(" {arguments}")
+        };
         let script = format!(
-            "#!/bin/sh\nset -eu\numask 077\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\nexec {}\n",
+            "#!/bin/sh\nset -eu\numask 077\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\ncd {}\nexec {}{}\n",
             shell_quote(&plugin.manifest.id),
             shell_quote(&config.to_string_lossy()),
-            shell_quote(&binary.to_string_lossy())
+            shell_quote(&config.to_string_lossy()),
+            shell_quote(&binary.to_string_lossy()),
+            arguments,
         );
-        write_atomic(&definition.join("run"), script.as_bytes(), 0o755)?;
+        write_atomic_if_changed(&definition.join("run"), script.as_bytes(), 0o755)?;
         if is_new {
             write_atomic(&definition.join("down"), b"", 0o644)?;
         }
@@ -326,6 +349,22 @@ fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), RuntimeEr
     result
 }
 
+fn write_atomic_if_changed(path: &Path, contents: &[u8], mode: u32) -> Result<(), RuntimeError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            let current = fs::read(path).map_err(|source| io_error(path.to_path_buf(), source))?;
+            let current_mode = metadata.permissions().mode() & 0o777;
+            if current == contents && current_mode == mode {
+                return Ok(());
+            }
+        }
+        Ok(_) => return Err(RuntimeError::OwnershipConflict(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error(path.to_path_buf(), source)),
+    }
+    write_atomic(path, contents, mode)
+}
+
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -354,7 +393,7 @@ fn require_owned_directory(path: &Path) -> Result<(), RuntimeError> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{os::unix::fs::MetadataExt, sync::Mutex, thread, time::Duration};
 
     use plugin_manager_core::{PluginManifest, PluginSettings, PluginUi, MANIFEST_SCHEMA_VERSION};
     use tempfile::TempDir;
@@ -387,9 +426,11 @@ mod tests {
                 schema: MANIFEST_SCHEMA_VERSION,
                 id: "tpms".into(),
                 name: "TPMS".into(),
+                description: "Bluetooth tire pressure monitoring".into(),
                 version: "0.1.0".into(),
                 runtime: Runtime::NativeService {
                     executable: "bin/tpms".into(),
+                    arguments: Vec::new(),
                 },
                 settings: PluginSettings {
                     enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -421,6 +462,7 @@ mod tests {
         assert!(script.contains("state/plugins/tpms"));
         assert!(script.contains("\numask 077\n"));
         assert!(script.contains("VENUS_PLUGIN_CONFIG_DIR"));
+        assert!(script.contains("\ncd '"));
         assert_eq!(
             fs::metadata(temp.path().join("config/tpms"))
                 .unwrap()
@@ -432,6 +474,62 @@ mod tests {
         assert_eq!(
             fs::read_link(temp.path().join("service/venus-plugin-tpms")).unwrap(),
             definition
+        );
+    }
+
+    #[test]
+    fn passes_declared_arguments_without_shell_expansion() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let mut plugin = installed();
+        plugin.manifest.runtime = Runtime::NativeService {
+            executable: "bin/rathole".into(),
+            arguments: vec!["--client".into(), "client.toml".into(), "$HOME".into()],
+        };
+
+        runtime.sync_definition(&plugin).unwrap();
+
+        let script = fs::read_to_string(temp.path().join("definitions/tpms/run")).unwrap();
+        assert!(script.contains(" '--client' 'client.toml' '$HOME'\n"));
+    }
+
+    #[test]
+    fn repeated_sync_does_not_touch_unchanged_files_or_permissions() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let plugin = installed();
+        runtime.sync_definition(&plugin).unwrap();
+
+        let run = temp.path().join("definitions/tpms/run");
+        let config = temp.path().join("config/tpms");
+        let run_before = fs::metadata(&run).unwrap();
+        let config_before = fs::metadata(&config).unwrap();
+        thread::sleep(Duration::from_millis(20));
+
+        runtime.sync_definition(&plugin).unwrap();
+
+        let run_after = fs::metadata(&run).unwrap();
+        let config_after = fs::metadata(&config).unwrap();
+        assert_eq!(run_before.ino(), run_after.ino());
+        assert_eq!(
+            run_before.modified().unwrap(),
+            run_after.modified().unwrap()
+        );
+        assert_eq!(
+            (config_before.ctime(), config_before.ctime_nsec()),
+            (config_after.ctime(), config_after.ctime_nsec())
         );
     }
 

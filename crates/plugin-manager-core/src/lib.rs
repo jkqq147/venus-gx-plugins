@@ -15,6 +15,6 @@ pub use lifecycle::{
     lifecycle_state, plan_reconciliation, DesiredPluginState, LifecycleState, ObservedPluginState,
     ReconcileAction, ServiceState,
 };
-pub use package::PackageExpectation;
+pub use package::{validate_vplugin, PackageExpectation};
 pub use registry::{InstalledPlugin, LocalRegistry, PluginRegistry, REGISTRY_SCHEMA_VERSION};
 pub use transaction::InstallOutcome;

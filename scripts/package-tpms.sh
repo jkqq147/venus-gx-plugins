@@ -2,7 +2,7 @@
 set -eu
 
 TARGET="armv7-unknown-linux-musleabihf"
-TPMS_REV="af21ad8d846b454b01ec26efafbabef8dc8a4a60"
+TPMS_REV="dbb46a53808dd09c792acb28b4e7e7ed0e9adf1c"
 SOURCE="${TPMS_SOURCE_DIR:-../venus-tpms-ble}"
 STAGE="target/vplugin/tpms"
 MANIFEST="plugins/tpms/manifest.json"

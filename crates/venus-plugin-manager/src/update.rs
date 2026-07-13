@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Write},
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
@@ -20,7 +20,7 @@ use crate::{
 const MANAGER_ARTIFACT_ID: &str = "plugin-manager";
 const RELEASE_SCHEMA_VERSION: u32 = 1;
 const MAX_RELEASE_BYTES: u64 = 64 * 1024;
-const MAX_BINARY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_BINARY_BYTES: u64 = 8 * 1024 * 1024;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,7 +71,6 @@ pub enum UpdateError {
 
 pub struct ManagerUpdater<T = SystemHttpTransport> {
     release_url: String,
-    cache_path: PathBuf,
     downloads_dir: PathBuf,
     transport: T,
     verifier: CatalogVerifier,
@@ -79,14 +78,9 @@ pub struct ManagerUpdater<T = SystemHttpTransport> {
 }
 
 impl ManagerUpdater<SystemHttpTransport> {
-    pub fn new(
-        release_url: impl Into<String>,
-        cache_path: impl Into<PathBuf>,
-        downloads_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(release_url: impl Into<String>, downloads_dir: impl Into<PathBuf>) -> Self {
         Self::with_transport_and_verifier(
             release_url,
-            cache_path,
             downloads_dir,
             SystemHttpTransport,
             CatalogVerifier::release().expect("embedded release public key must be valid"),
@@ -97,14 +91,12 @@ impl ManagerUpdater<SystemHttpTransport> {
 impl<T: HttpTransport> ManagerUpdater<T> {
     pub fn with_transport_and_verifier(
         release_url: impl Into<String>,
-        cache_path: impl Into<PathBuf>,
         downloads_dir: impl Into<PathBuf>,
         transport: T,
         verifier: CatalogVerifier,
     ) -> Self {
         Self {
             release_url: release_url.into(),
-            cache_path: cache_path.into(),
             downloads_dir: downloads_dir.into(),
             transport,
             verifier,
@@ -114,16 +106,6 @@ impl<T: HttpTransport> ManagerUpdater<T> {
 
     pub fn initialize(&mut self) -> Result<ManagerUpdateSnapshot, UpdateError> {
         cleanup_temporary_downloads(&self.downloads_dir)?;
-        if self.cache_path.exists() {
-            let contents = fs::read(&self.cache_path)
-                .map_err(|source| io_error(self.cache_path.clone(), source))?;
-            if contents.len() as u64 > MAX_RELEASE_BYTES {
-                return Err(UpdateError::InvalidRelease(
-                    "cached release metadata exceeds the size limit".into(),
-                ));
-            }
-            self.release = Some(self.parse_release(&contents)?);
-        }
         Ok(self.snapshot())
     }
 
@@ -133,7 +115,6 @@ impl<T: HttpTransport> ManagerUpdater<T> {
         self.transport
             .download(&self.release_url, &mut contents, MAX_RELEASE_BYTES)?;
         let release = self.parse_release(&contents)?;
-        write_atomic(&self.cache_path, &contents, 0o644)?;
         self.release = Some(release);
         Ok(self.snapshot())
     }
@@ -204,33 +185,30 @@ impl<T: HttpTransport> ManagerUpdater<T> {
             .write(true)
             .open(&temp_path)
             .map_err(|source| io_error(temp_path.clone(), source))?;
-        let result = self
-            .transport
-            .download(&release.binary.url, &mut file, MAX_BINARY_BYTES)
-            .map_err(UpdateError::from)
-            .and_then(|_| {
-                file.sync_all()
-                    .map_err(|source| io_error(temp_path.clone(), source))
-            })
-            .and_then(|_| {
-                let actual = sha256_file(&temp_path)?;
-                if actual == release.binary.sha256 {
-                    Ok(())
-                } else {
-                    Err(UpdateError::HashMismatch {
-                        expected: release.binary.sha256.clone(),
-                        actual,
-                    })
-                }
-            })
-            .and_then(|_| {
-                fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o755))
-                    .map_err(|source| io_error(temp_path.clone(), source))
-            })
-            .and_then(|_| {
-                fs::rename(&temp_path, &final_path)
-                    .map_err(|source| io_error(final_path.clone(), source))
-            });
+        let mut hasher = Sha256::new();
+        let result = (|| {
+            {
+                let mut destination = HashingWriter {
+                    inner: &mut file,
+                    hasher: &mut hasher,
+                };
+                self.transport
+                    .download(&release.binary.url, &mut destination, MAX_BINARY_BYTES)?;
+            }
+            file.sync_all()
+                .map_err(|source| io_error(temp_path.clone(), source))?;
+            let actual = format!("{:x}", hasher.finalize());
+            if actual != release.binary.sha256 {
+                return Err(UpdateError::HashMismatch {
+                    expected: release.binary.sha256.clone(),
+                    actual,
+                });
+            }
+            fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o755))
+                .map_err(|source| io_error(temp_path.clone(), source))?;
+            fs::rename(&temp_path, &final_path)
+                .map_err(|source| io_error(final_path.clone(), source))
+        })();
         if result.is_err() {
             let _ = fs::remove_file(&temp_path);
         }
@@ -302,20 +280,21 @@ fn version_is_newer(available: &str, installed: &str) -> bool {
         .is_some_and(|(available, installed)| available > installed)
 }
 
-fn sha256_file(path: &Path) -> Result<String, UpdateError> {
-    let mut file = fs::File::open(path).map_err(|source| io_error(path, source))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|source| io_error(path, source))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
+struct HashingWriter<'a, W> {
+    inner: &'a mut W,
+    hasher: &'a mut Sha256,
+}
+
+impl<W: Write> Write for HashingWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.hasher.update(&buffer[..written]);
+        Ok(written)
     }
-    Ok(format!("{:x}", hasher.finalize()))
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn verify_candidate_version(path: &Path, expected: &str) -> Result<(), UpdateError> {
@@ -334,39 +313,6 @@ fn verify_candidate_version(path: &Path, expected: &str) -> Result<(), UpdateErr
     }
 }
 
-fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), UpdateError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| UpdateError::InvalidRelease("cache path has no parent".into()))?;
-    fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
-    let temp = parent.join(format!(
-        ".manager-release.tmp-{}-{}",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-    ));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp)
-        .map_err(|source| io_error(temp.clone(), source))?;
-    let result = file
-        .write_all(contents)
-        .map_err(|source| io_error(temp.clone(), source))
-        .and_then(|_| {
-            file.set_permissions(fs::Permissions::from_mode(mode))
-                .map_err(|source| io_error(temp.clone(), source))
-        })
-        .and_then(|_| {
-            file.sync_all()
-                .map_err(|source| io_error(temp.clone(), source))
-        })
-        .and_then(|_| fs::rename(&temp, path).map_err(|source| io_error(path, source)));
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
 fn io_error(path: impl Into<PathBuf>, source: io::Error) -> UpdateError {
     UpdateError::Io {
         path: path.into(),
@@ -376,7 +322,7 @@ fn io_error(path: impl Into<PathBuf>, source: io::Error) -> UpdateError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::{collections::HashMap, io::Write, sync::Mutex};
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
@@ -463,14 +409,13 @@ mod tests {
     }
 
     #[test]
-    fn refresh_verifies_and_caches_release_metadata() {
+    fn refresh_verifies_release_metadata_in_memory() {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let expected = release(b"manager", "9.0.0");
         transport.insert(RELEASE_URL, serde_json::to_vec(&expected).unwrap());
         let mut updater = ManagerUpdater::with_transport_and_verifier(
             RELEASE_URL,
-            temp.path().join("cache/release.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
@@ -479,26 +424,17 @@ mod tests {
         let snapshot = updater.refresh().unwrap();
         assert_eq!(snapshot.available_version, "9.0.0");
         assert!(snapshot.has_update);
-
-        let mut reloaded = ManagerUpdater::with_transport_and_verifier(
-            RELEASE_URL,
-            temp.path().join("cache/release.json"),
-            temp.path().join("downloads"),
-            FakeTransport::default(),
-            verifier(),
-        );
-        assert_eq!(reloaded.initialize().unwrap(), snapshot);
+        assert!(!temp.path().join("cache").exists());
     }
 
     #[test]
-    fn changed_release_metadata_is_rejected_without_replacing_cache() {
+    fn changed_release_metadata_keeps_last_verified_value_in_memory() {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let mut valid = release(b"manager", "9.0.0");
         transport.insert(RELEASE_URL, serde_json::to_vec(&valid).unwrap());
         let mut updater = ManagerUpdater::with_transport_and_verifier(
             RELEASE_URL,
-            temp.path().join("cache/release.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
@@ -523,7 +459,6 @@ mod tests {
         transport.insert(BINARY_URL, b"changed".to_vec());
         let updater = ManagerUpdater::with_transport_and_verifier(
             RELEASE_URL,
-            temp.path().join("cache/release.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),

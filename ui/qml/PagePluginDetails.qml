@@ -10,10 +10,12 @@ MbPage {
 	property string pageLoadError: ""
 
 	property VBusItem pluginName: VBusItem { bind: root.pluginRoot + "/Name" }
+	property VBusItem pluginDescription: VBusItem { bind: root.pluginRoot + "/Description" }
 	property VBusItem installed: VBusItem { bind: root.pluginRoot + "/Installed" }
 	property VBusItem available: VBusItem { bind: root.pluginRoot + "/Available" }
 	property VBusItem enabledItem: VBusItem { bind: root.pluginRoot + "/Enabled" }
 	property VBusItem hasUpdate: VBusItem { bind: root.pluginRoot + "/HasUpdate" }
+	property VBusItem catalogVersion: VBusItem { bind: root.pluginRoot + "/CatalogVersion" }
 	property VBusItem hasSettingsPage: VBusItem { bind: root.pluginRoot + "/HasSettingsPage" }
 	property VBusItem settingsPage: VBusItem { bind: root.pluginRoot + "/SettingsPage" }
 	property VBusItem installCommand: VBusItem { bind: root.pluginRoot + "/Install" }
@@ -39,26 +41,31 @@ MbPage {
 	}
 
 	model: VisibleItemModel {
-		MbItemValue {
-			description: qsTr("Status")
-			item.bind: root.pluginRoot + "/Status"
+		MbItemText {
+			text: pluginDescription.valid ? String(pluginDescription.value) : ""
+			wrapMode: Text.WordWrap
+			show: pluginDescription.valid && pluginDescription.value !== ""
 		}
 
 		MbItemValue {
-			description: qsTr("Installed version")
+			description: qsTr("Version")
 			item.bind: root.pluginRoot + "/InstalledVersion"
 			show: installed.value === 1
 		}
 
 		MbItemValue {
-			description: qsTr("Available version")
+			description: qsTr("Version")
 			item.bind: root.pluginRoot + "/CatalogVersion"
-			show: available.value === 1
+			show: installed.value !== 1 && available.value === 1
 		}
 
 		MbOK {
-			description: hasUpdate.value === 1 ? qsTr("Update") : qsTr("Install")
-			value: busy.value === 1 ? qsTr("Working...") : qsTr("Press to continue")
+			description: installed.value === 1 ? qsTr("Update") : qsTr("Install")
+			value: busy.value === 1
+				? qsTr("Working...")
+				: installed.value === 1
+					? qsTr("Version ") + String(root.catalogVersion.value)
+					: qsTr("Press to install")
 			show: available.value === 1 && (installed.value !== 1 || hasUpdate.value === 1)
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
@@ -73,7 +80,7 @@ MbPage {
 		}
 
 		MbOK {
-			description: qsTr("Plugin page")
+			description: qsTr("Open plugin")
 			value: qsTr("Open")
 			show: installed.value === 1 && root.enabledItem.value === 1 && root.hasSettingsPage.value === 1
 			editable: busy.value !== 1
@@ -83,7 +90,7 @@ MbPage {
 
 		MbOK {
 			description: qsTr("Uninstall")
-			value: qsTr("Press to continue")
+			value: qsTr("Press to choose")
 			show: installed.value === 1
 			editable: busy.value !== 1
 			enabled: busy.value !== 1

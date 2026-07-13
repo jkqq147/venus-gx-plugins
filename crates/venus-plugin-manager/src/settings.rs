@@ -63,6 +63,9 @@ impl VenusSettings {
 
 impl SettingsStore for VenusSettings {
     fn ensure_enabled(&self, manifest: &PluginManifest) -> Result<bool, SettingsError> {
+        if let Ok(enabled) = self.read_enabled(manifest) {
+            return Ok(enabled);
+        }
         let relative = relative_setting_path(manifest);
         let status: i32 = self.settings_proxy()?.call(
             "AddSetting",
@@ -145,6 +148,7 @@ mod tests {
             schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             runtime: Runtime::QmlOnly,
             settings: PluginSettings {

@@ -51,7 +51,6 @@ impl ManagerPublisher {
             ("/Mgmt/Connection", "Venus OS system D-Bus"),
             ("/ProductName", "Plugin Manager"),
             ("/FirmwareVersion", env!("CARGO_PKG_VERSION")),
-            ("/CatalogStatus", "尚未刷新"),
             ("/InstalledIds", ""),
             ("/AvailableIds", ""),
             ("/DeviceEntryIds", ""),
@@ -66,6 +65,7 @@ impl ManagerPublisher {
             ("/Connected", 1),
             ("/InstalledCount", 0),
             ("/AvailableCount", 0),
+            ("/CatalogLoaded", 0),
             ("/Busy", 0),
             ("/Manager/HasUpdate", 0),
         ] {
@@ -126,13 +126,7 @@ impl ManagerPublisher {
             .filter(|plugin| plugin.installed)
             .map(|plugin| plugin.id.as_str())
             .collect();
-        let available: Vec<_> = snapshot
-            .plugins
-            .iter()
-            .filter(|plugin| plugin.available)
-            .map(|plugin| plugin.id.as_str())
-            .collect();
-        self.string("/CatalogStatus", &snapshot.catalog_state.text())?;
+        let available = installable_ids(&snapshot.plugins);
         self.string("/InstalledIds", &installed.join(","))?;
         self.string("/AvailableIds", &available.join(","))?;
         self.string("/DeviceEntryIds", &device_entry_ids(&snapshot.plugins))?;
@@ -142,6 +136,7 @@ impl ManagerPublisher {
         self.string("/Manager/AvailableVersion", &manager.available_version)?;
         self.i32("/InstalledCount", installed.len() as i32)?;
         self.i32("/AvailableCount", available.len() as i32)?;
+        self.i32("/CatalogLoaded", i32::from(snapshot.catalog_loaded))?;
         self.i32("/Busy", i32::from(busy))?;
         self.i32("/Manager/HasUpdate", i32::from(manager.has_update))?;
         self.i32("/Refresh", 0)?;
@@ -199,11 +194,11 @@ impl ManagerPublisher {
         for suffix in [
             "Id",
             "Name",
+            "Description",
             "InstalledVersion",
             "CatalogVersion",
             "Lifecycle",
             "ServiceState",
-            "Status",
             "Error",
             "SettingsPage",
             "DashboardComponent",
@@ -287,11 +282,11 @@ impl ManagerPublisher {
         for (suffix, value) in [
             ("Id", plugin.id.as_str()),
             ("Name", plugin.name.as_str()),
+            ("Description", plugin.description.as_str()),
             ("InstalledVersion", plugin.installed_version.as_str()),
             ("CatalogVersion", plugin.catalog_version.as_str()),
             ("Lifecycle", lifecycle_text(plugin.lifecycle)),
             ("ServiceState", service_text(plugin.service_state)),
-            ("Status", plugin.status.as_str()),
             ("Error", plugin.error.as_str()),
             ("SettingsPage", plugin.settings_page.as_str()),
             ("DashboardComponent", plugin.dashboard_component.as_str()),
@@ -379,6 +374,14 @@ fn device_entry_ids(plugins: &[PluginSnapshot]) -> String {
         .join(",")
 }
 
+fn installable_ids(plugins: &[PluginSnapshot]) -> Vec<&str> {
+    plugins
+        .iter()
+        .filter(|plugin| plugin.available && !plugin.installed)
+        .map(|plugin| plugin.id.as_str())
+        .collect()
+}
+
 fn dashboard_sources(plugins: &[PluginSnapshot]) -> String {
     plugins
         .iter()
@@ -412,13 +415,17 @@ fn service_text(state: ServiceState) -> &'static str {
 mod tests {
     use plugin_manager_core::{LifecycleState, ServiceState};
 
-    use super::{dashboard_sources, device_entry_ids, plugin_key_from_item_path, PluginSnapshot};
+    use super::{
+        dashboard_sources, device_entry_ids, installable_ids, plugin_key_from_item_path,
+        PluginSnapshot,
+    };
 
     fn plugin(id: &str, enabled: bool) -> PluginSnapshot {
         PluginSnapshot {
             id: id.into(),
             path_key: id.replace('-', "_"),
             name: id.into(),
+            description: format!("{id} description"),
             installed: true,
             available: true,
             enabled,
@@ -427,7 +434,6 @@ mod tests {
             has_update: false,
             service_state: ServiceState::Running,
             lifecycle: LifecycleState::Enabled,
-            status: "已启用".into(),
             error: String::new(),
             settings_page: format!(
                 "/data/venus-gx-plugins/state/plugins/{id}/payload/qml/Page.qml"
@@ -456,6 +462,21 @@ mod tests {
         assert_eq!(
             dashboard_sources(&plugins),
             "/data/venus-gx-plugins/state/plugins/a/payload/qml/Overview.qml"
+        );
+    }
+
+    #[test]
+    fn get_plugins_excludes_already_installed_entries() {
+        let installed = plugin("installed", true);
+        let mut installable = plugin("installable", false);
+        installable.installed = false;
+        let mut local_only = plugin("local-only", false);
+        local_only.installed = false;
+        local_only.available = false;
+
+        assert_eq!(
+            installable_ids(&[installed, installable, local_only]),
+            vec!["installable"]
         );
     }
 

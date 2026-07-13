@@ -1,8 +1,9 @@
 use std::{
     collections::HashSet,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    fs::{self, File},
+    io::Read,
     path::{Component, Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use flate2::read::GzDecoder;
@@ -10,15 +11,42 @@ use sha2::{Digest, Sha256};
 
 use crate::{contract::is_sha256, error::io_error, CoreError, PluginManifest, Runtime};
 
-const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_PACKAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 512;
-const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES: u64 = 16 * 1024 * 1024;
+static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageExpectation {
     pub id: String,
     pub version: String,
     pub sha256: String,
+}
+
+pub fn validate_vplugin(
+    source: &Path,
+    scratch_root: &Path,
+    expectation: &PackageExpectation,
+) -> Result<(), CoreError> {
+    fs::create_dir_all(scratch_root)
+        .map_err(|error| io_error(scratch_root.to_path_buf(), error))?;
+    let metadata = fs::symlink_metadata(scratch_root)
+        .map_err(|error| io_error(scratch_root.to_path_buf(), error))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(CoreError::InvalidPackage(format!(
+            "package scratch path is not a real directory: {}",
+            scratch_root.display()
+        )));
+    }
+    let scratch = scratch_root.join(format!(
+        "validate-{}-{}",
+        std::process::id(),
+        SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&scratch).map_err(|error| io_error(scratch.clone(), error))?;
+    let result = prepare_package(source, &scratch, expectation).map(|_| ());
+    let _ = fs::remove_dir_all(&scratch);
+    result
 }
 
 pub(crate) struct PreparedPackage {
@@ -38,8 +66,7 @@ pub(crate) fn prepare_package(
         ));
     }
     let expected_sha256 = expectation.sha256.to_ascii_lowercase();
-    let copied_package = transaction_dir.join("package.vplugin");
-    let actual_sha256 = copy_and_hash(source, &copied_package)?;
+    let actual_sha256 = hash_package(source)?;
     if actual_sha256 != expected_sha256 {
         return Err(CoreError::ChecksumMismatch {
             expected: expected_sha256,
@@ -48,7 +75,7 @@ pub(crate) fn prepare_package(
     }
 
     let payload = transaction_dir.join("payload");
-    let manifest = extract_package(&copied_package, &payload)?;
+    let manifest = extract_package(source, &payload)?;
     if manifest.id != expectation.id {
         return Err(CoreError::IdentityMismatch {
             field: "id",
@@ -71,13 +98,8 @@ pub(crate) fn prepare_package(
     })
 }
 
-fn copy_and_hash(source: &Path, destination: &Path) -> Result<String, CoreError> {
+fn hash_package(source: &Path) -> Result<String, CoreError> {
     let mut input = File::open(source).map_err(|error| io_error(source.to_path_buf(), error))?;
-    let mut output = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .map_err(|error| io_error(destination.to_path_buf(), error))?;
     let mut hasher = Sha256::new();
     let mut copied = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -96,13 +118,7 @@ fn copy_and_hash(source: &Path, destination: &Path) -> Result<String, CoreError>
             });
         }
         hasher.update(&buffer[..count]);
-        output
-            .write_all(&buffer[..count])
-            .map_err(|error| io_error(destination.to_path_buf(), error))?;
     }
-    output
-        .sync_all()
-        .map_err(|error| io_error(destination.to_path_buf(), error))?;
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -219,7 +235,7 @@ fn validate_archive_path(path: &Path, is_directory: bool) -> Result<(), CoreErro
     });
     match first {
         Some("manifest.json") if components.next().is_none() => Ok(()),
-        Some("bin" | "qml") if is_directory || components.next().is_some() => Ok(()),
+        Some("bin" | "qml" | "licenses") if is_directory || components.next().is_some() => Ok(()),
         _ => Err(CoreError::InvalidPackage(format!(
             "path is outside the package contract: {}",
             path.display()
@@ -229,7 +245,7 @@ fn validate_archive_path(path: &Path, is_directory: bool) -> Result<(), CoreErro
 
 pub(crate) fn validate_payload(root: &Path, manifest: &PluginManifest) -> Result<(), CoreError> {
     require_regular_file(&root.join("manifest.json"))?;
-    if let Runtime::NativeService { executable } = &manifest.runtime {
+    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
         require_regular_file(&root.join(executable))?;
     }
     for relative_path in [&manifest.ui.settings_page, &manifest.ui.dashboard_component]
@@ -284,7 +300,7 @@ fn normalize_permissions(root: &Path, manifest: &PluginManifest) -> Result<(), C
     fs::set_permissions(root, fs::Permissions::from_mode(0o755))
         .map_err(|error| io_error(root.to_path_buf(), error))?;
     visit(root)?;
-    if let Runtime::NativeService { executable } = &manifest.runtime {
+    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
         let path = root.join(executable);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
             .map_err(|error| io_error(path, error))?;

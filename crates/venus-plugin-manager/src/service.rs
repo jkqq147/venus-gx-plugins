@@ -1,9 +1,4 @@
-use std::{
-    env,
-    path::PathBuf,
-    sync::mpsc,
-    time::{Duration, Instant},
-};
+use std::{env, path::PathBuf, sync::mpsc};
 
 use plugin_manager_core::LocalRegistry;
 use thiserror::Error;
@@ -19,6 +14,7 @@ use crate::{
 };
 
 pub const DEFAULT_APP_ROOT: &str = "/data/venus-gx-plugins";
+pub const DEFAULT_DOWNLOAD_ROOT: &str = "/tmp/venus-gx-plugins";
 pub const DEFAULT_CATALOG_URL: &str = "https://venus-gx-plugins.pages.dev/catalog/plugins.json";
 pub const DEFAULT_MANAGER_RELEASE_URL: &str =
     "https://venus-gx-plugins.pages.dev/manager/release.json";
@@ -37,6 +33,7 @@ pub enum ServiceError {
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
     pub app_root: PathBuf,
+    pub download_root: PathBuf,
     pub service_root: PathBuf,
     pub catalog_url: String,
     pub manager_release_url: String,
@@ -48,6 +45,9 @@ impl ServiceConfig {
             app_root: env::var_os("VENUS_PLUGIN_MANAGER_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(DEFAULT_APP_ROOT)),
+            download_root: env::var_os("VENUS_PLUGIN_MANAGER_DOWNLOAD_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_DOWNLOAD_ROOT)),
             service_root: env::var_os("VENUS_PLUGIN_MANAGER_SERVICE_ROOT")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/service")),
@@ -69,11 +69,7 @@ pub fn run(config: ServiceConfig) -> Result<(), ServiceError> {
         config.app_root.join("services"),
         &config.service_root,
     );
-    let catalog_client = CatalogClient::new(
-        config.catalog_url,
-        config.app_root.join("cache/catalog.json"),
-        config.app_root.join("downloads"),
-    );
+    let catalog_client = CatalogClient::new(config.catalog_url, &config.download_root);
     let mut engine = ManagerEngine::new(
         LocalRegistry::new(&state_root),
         settings,
@@ -81,12 +77,8 @@ pub fn run(config: ServiceConfig) -> Result<(), ServiceError> {
         catalog_client,
     );
     let snapshot = engine.initialize()?;
-    let mut updater = ManagerUpdater::new(
-        config.manager_release_url,
-        config.app_root.join("cache/manager-release.json"),
-        config.app_root.join("downloads"),
-    );
-    let mut last_error = updater
+    let mut updater = ManagerUpdater::new(config.manager_release_url, config.download_root);
+    let last_error = updater
         .initialize()
         .err()
         .map(|error| error.to_string())
@@ -95,23 +87,10 @@ pub fn run(config: ServiceConfig) -> Result<(), ServiceError> {
     let mut publisher = ManagerPublisher::new(connection, command_sender)?;
     publisher.publish(&snapshot, &updater.snapshot(), false, &last_error)?;
 
-    let mut last_reconcile = Instant::now();
-    loop {
-        match command_receiver.recv_timeout(Duration::from_secs(1)) {
-            Ok(command) => {
-                last_error = execute_command(&mut engine, &mut updater, &mut publisher, command)?;
-                last_reconcile = Instant::now();
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_reconcile.elapsed() >= Duration::from_secs(5) {
-                    let snapshot = engine.snapshot()?;
-                    publisher.publish(&snapshot, &updater.snapshot(), false, &last_error)?;
-                    last_reconcile = Instant::now();
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-        }
+    while let Ok(command) = command_receiver.recv() {
+        execute_command(&mut engine, &mut updater, &mut publisher, command)?;
     }
+    Ok(())
 }
 
 fn execute_command(
@@ -174,6 +153,7 @@ mod tests {
     fn environment_defaults_match_device_layout() {
         let config = ServiceConfig {
             app_root: PathBuf::from(DEFAULT_APP_ROOT),
+            download_root: PathBuf::from(DEFAULT_DOWNLOAD_ROOT),
             service_root: PathBuf::from("/service"),
             catalog_url: DEFAULT_CATALOG_URL.into(),
             manager_release_url: DEFAULT_MANAGER_RELEASE_URL.into(),
@@ -182,6 +162,7 @@ mod tests {
             config.app_root.join("state"),
             PathBuf::from("/data/venus-gx-plugins/state")
         );
+        assert_eq!(config.download_root, PathBuf::from("/tmp/venus-gx-plugins"));
         assert!(config.catalog_url.starts_with("https://"));
         assert!(config.manager_release_url.starts_with("https://"));
     }

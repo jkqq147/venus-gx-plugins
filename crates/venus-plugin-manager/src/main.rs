@@ -116,7 +116,12 @@ fn apply_manager_update(expected_version: &str) -> Result<(), String> {
     }
     let config = venus_plugin_manager::installer::InstallConfig::device();
     let executable = env::current_exe().map_err(|error| error.to_string())?;
-    if executable.parent() != Some(config.app_root.join("downloads").as_path()) {
+    let download_root = env::var_os("VENUS_PLUGIN_MANAGER_DOWNLOAD_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(venus_plugin_manager::service::DEFAULT_DOWNLOAD_ROOT)
+        });
+    if executable.parent() != Some(download_root.as_path()) {
         return Err("manager update must run from the managed downloads directory".into());
     }
     venus_plugin_manager::installer::install(config).map_err(|error| error.to_string())?;

@@ -11,13 +11,14 @@ use std::{
     time::Duration,
 };
 
-use plugin_manager_core::{Catalog, CatalogEntry};
+use plugin_manager_core::{validate_vplugin, Catalog, CatalogEntry, CoreError, PackageExpectation};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::signing::{CatalogVerifier, SigningError};
 
 const MAX_CATALOG_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_PACKAGE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
 const DISTRIBUTION_HOST: &str = "venus-gx-plugins.pages.dev";
 const DISTRIBUTION_ORIGIN: &str = "https://venus-gx-plugins.pages.dev";
@@ -43,6 +44,10 @@ pub enum CatalogError {
     InvalidCatalog(String),
     #[error("catalog does not contain plugin {0}")]
     MissingPlugin(String),
+    #[error("plugin package SHA-256 mismatch: expected {expected}, got {actual}")]
+    HashMismatch { expected: String, actual: String },
+    #[error("invalid plugin package: {0}")]
+    Package(#[from] CoreError),
     #[error("catalog signature is invalid: {0}")]
     Signature(#[from] SigningError),
 }
@@ -297,32 +302,25 @@ fn http_error(url: &str, message: impl Into<String>) -> CatalogError {
 
 pub struct CatalogClient<T = SystemHttpTransport> {
     catalog_url: String,
-    cache_path: PathBuf,
     downloads_dir: PathBuf,
     transport: T,
     verifier: CatalogVerifier,
 }
 
 impl CatalogClient<SystemHttpTransport> {
-    pub fn new(
-        catalog_url: impl Into<String>,
-        cache_path: impl Into<PathBuf>,
-        downloads_dir: impl Into<PathBuf>,
-    ) -> Self {
-        Self::with_transport(catalog_url, cache_path, downloads_dir, SystemHttpTransport)
+    pub fn new(catalog_url: impl Into<String>, downloads_dir: impl Into<PathBuf>) -> Self {
+        Self::with_transport(catalog_url, downloads_dir, SystemHttpTransport)
     }
 }
 
 impl<T: HttpTransport> CatalogClient<T> {
     pub fn with_transport(
         catalog_url: impl Into<String>,
-        cache_path: impl Into<PathBuf>,
         downloads_dir: impl Into<PathBuf>,
         transport: T,
     ) -> Self {
         Self::with_transport_and_verifier(
             catalog_url,
-            cache_path,
             downloads_dir,
             transport,
             CatalogVerifier::release().expect("embedded release public key must be valid"),
@@ -331,36 +329,16 @@ impl<T: HttpTransport> CatalogClient<T> {
 
     pub fn with_transport_and_verifier(
         catalog_url: impl Into<String>,
-        cache_path: impl Into<PathBuf>,
         downloads_dir: impl Into<PathBuf>,
         transport: T,
         verifier: CatalogVerifier,
     ) -> Self {
         Self {
             catalog_url: catalog_url.into(),
-            cache_path: cache_path.into(),
             downloads_dir: downloads_dir.into(),
             transport,
             verifier,
         }
-    }
-
-    pub fn load_cached(&self) -> Result<Option<Catalog>, CatalogError> {
-        cleanup_temporary_downloads(&self.downloads_dir)?;
-        if !self.cache_path.exists() {
-            return Ok(None);
-        }
-        let metadata = fs::metadata(&self.cache_path)
-            .map_err(|source| io_error(self.cache_path.clone(), source))?;
-        if metadata.len() > MAX_CATALOG_BYTES {
-            return Err(CatalogError::TooLarge {
-                url: self.cache_path.display().to_string(),
-                limit: MAX_CATALOG_BYTES,
-            });
-        }
-        let contents = fs::read(&self.cache_path)
-            .map_err(|source| io_error(self.cache_path.clone(), source))?;
-        self.parse_catalog(&contents).map(Some)
     }
 
     pub fn refresh(&self) -> Result<Catalog, CatalogError> {
@@ -368,9 +346,7 @@ impl<T: HttpTransport> CatalogClient<T> {
         let mut contents = Vec::new();
         self.transport
             .download(&self.catalog_url, &mut contents, MAX_CATALOG_BYTES)?;
-        let catalog = self.parse_catalog(&contents)?;
-        write_atomic(&self.cache_path, &contents)?;
-        Ok(catalog)
+        self.parse_catalog(&contents)
     }
 
     pub fn download_plugin(
@@ -378,6 +354,7 @@ impl<T: HttpTransport> CatalogClient<T> {
         catalog: &Catalog,
         id: &str,
     ) -> Result<(PathBuf, CatalogEntry), CatalogError> {
+        cleanup_temporary_downloads(&self.downloads_dir)?;
         let entry = catalog
             .plugins
             .iter()
@@ -402,17 +379,40 @@ impl<T: HttpTransport> CatalogClient<T> {
             .write(true)
             .open(&temp_path)
             .map_err(|source| io_error(temp_path.clone(), source))?;
-        let result = self
-            .transport
-            .download(&entry.package.url, &mut file, MAX_PACKAGE_BYTES)
-            .and_then(|_| {
-                file.sync_all()
-                    .map_err(|source| io_error(temp_path.clone(), source))
-            })
-            .and_then(|_| {
-                fs::rename(&temp_path, &final_path)
-                    .map_err(|source| io_error(final_path.clone(), source))
-            });
+        let mut hasher = Sha256::new();
+        let result = (|| {
+            {
+                let mut destination = HashingWriter {
+                    inner: &mut file,
+                    hasher: &mut hasher,
+                };
+                self.transport
+                    .download(&entry.package.url, &mut destination, MAX_PACKAGE_BYTES)?;
+            }
+            file.sync_all()
+                .map_err(|source| io_error(temp_path.clone(), source))?;
+            let actual = format!("{:x}", hasher.finalize());
+            if actual != entry.package.sha256 {
+                return Err(CatalogError::HashMismatch {
+                    expected: entry.package.sha256.clone(),
+                    actual,
+                });
+            }
+            let scratch_root = self.downloads_dir.join(".preflight");
+            let validation = validate_vplugin(
+                &temp_path,
+                &scratch_root,
+                &PackageExpectation {
+                    id: entry.id.clone(),
+                    version: entry.version.clone(),
+                    sha256: entry.package.sha256.clone(),
+                },
+            );
+            let _ = fs::remove_dir(&scratch_root);
+            validation?;
+            fs::rename(&temp_path, &final_path)
+                .map_err(|source| io_error(final_path.clone(), source))
+        })();
         if result.is_err() {
             let _ = fs::remove_file(&temp_path);
         }
@@ -430,6 +430,23 @@ impl<T: HttpTransport> CatalogClient<T> {
             self.verifier.verify(entry)?;
         }
         Ok(catalog)
+    }
+}
+
+struct HashingWriter<'a, W> {
+    inner: &'a mut W,
+    hasher: &'a mut Sha256,
+}
+
+impl<W: Write> Write for HashingWriter<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.hasher.update(&buffer[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
     }
 }
 
@@ -476,33 +493,6 @@ fn copy_limited(
     Ok(copied)
 }
 
-fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), CatalogError> {
-    let parent = path.parent().ok_or_else(|| {
-        CatalogError::InvalidCatalog("catalog cache path has no parent directory".into())
-    })?;
-    fs::create_dir_all(parent).map_err(|source| io_error(parent.to_path_buf(), source))?;
-    let temp_path = parent.join(format!(".catalog.tmp-{}", next_suffix()));
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temp_path)
-        .map_err(|source| io_error(temp_path.clone(), source))?;
-    let result = file
-        .write_all(contents)
-        .map_err(|source| io_error(temp_path.clone(), source))
-        .and_then(|_| {
-            file.sync_all()
-                .map_err(|source| io_error(temp_path.clone(), source))
-        })
-        .and_then(|_| {
-            fs::rename(&temp_path, path).map_err(|source| io_error(path.to_path_buf(), source))
-        });
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
 pub(crate) fn cleanup_temporary_downloads(directory: &Path) -> Result<(), CatalogError> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -544,7 +534,11 @@ mod tests {
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
-    use plugin_manager_core::{CatalogEntry, PackageSource, CATALOG_SCHEMA_VERSION};
+    use flate2::{write::GzEncoder, Compression};
+    use plugin_manager_core::{
+        CatalogEntry, PackageSource, PluginManifest, PluginSettings, PluginUi, Runtime,
+        CATALOG_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -587,8 +581,45 @@ mod tests {
         }
     }
 
-    fn catalog(package_url: &str) -> Catalog {
-        let sha256 = "0".repeat(64);
+    fn package() -> Vec<u8> {
+        let manifest = PluginManifest {
+            schema: MANIFEST_SCHEMA_VERSION,
+            id: "tpms".into(),
+            name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
+            version: "0.1.0".into(),
+            runtime: Runtime::NativeService {
+                executable: "bin/tpms".into(),
+                arguments: Vec::new(),
+            },
+            settings: PluginSettings {
+                enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
+            },
+            ui: PluginUi::default(),
+        };
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        for (path, contents, mode) in [
+            (
+                "manifest.json",
+                serde_json::to_vec(&manifest).unwrap(),
+                0o644,
+            ),
+            ("bin/tpms", b"binary".to_vec(), 0o755),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, contents.as_slice())
+                .unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn catalog(package_url: &str, package: &[u8]) -> Catalog {
+        let sha256 = format!("{:x}", Sha256::digest(package));
         let key = SigningKey::from_bytes(&[7; 32]);
         let signature = key.sign(&crate::signing::signature_message_parts(
             "tpms", "0.1.0", &sha256,
@@ -598,6 +629,7 @@ mod tests {
             plugins: vec![CatalogEntry {
                 id: "tpms".into(),
                 name: "TPMS".into(),
+                description: "Bluetooth tire pressure monitoring".into(),
                 version: "0.1.0".into(),
                 package: PackageSource {
                     url: package_url.into(),
@@ -694,34 +726,32 @@ mod tests {
     }
 
     #[test]
-    fn refresh_validates_and_atomically_caches_catalog() {
+    fn refresh_validates_catalog_without_persisting_it() {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let catalog_url = "https://example.com/plugins.json";
-        let expected = catalog("https://example.com/tpms.vplugin");
+        let expected = catalog("https://example.com/tpms.vplugin", &package());
         transport.insert(catalog_url, serde_json::to_vec(&expected).unwrap());
         let client = CatalogClient::with_transport_and_verifier(
             catalog_url,
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
         );
 
         assert_eq!(client.refresh().unwrap(), expected);
-        assert_eq!(client.load_cached().unwrap(), Some(expected));
+        assert!(!temp.path().join("cache").exists());
     }
 
     #[test]
-    fn invalid_refresh_preserves_last_valid_cache() {
+    fn invalid_refresh_does_not_create_persistent_state() {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let catalog_url = "https://example.com/plugins.json";
-        let expected = catalog("https://example.com/tpms.vplugin");
+        let expected = catalog("https://example.com/tpms.vplugin", &package());
         transport.insert(catalog_url, serde_json::to_vec(&expected).unwrap());
         let client = CatalogClient::with_transport_and_verifier(
             catalog_url,
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
@@ -730,7 +760,7 @@ mod tests {
         client.transport.insert(catalog_url, b"not json".to_vec());
 
         assert!(client.refresh().is_err());
-        assert_eq!(client.load_cached().unwrap(), Some(expected));
+        assert!(!temp.path().join("cache").exists());
     }
 
     #[test]
@@ -738,12 +768,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let catalog_url = "https://example.com/plugins.json";
-        let mut changed = catalog("https://example.com/tpms.vplugin");
+        let mut changed = catalog("https://example.com/tpms.vplugin", &package());
         changed.plugins[0].version = "0.2.0".into();
         transport.insert(catalog_url, serde_json::to_vec(&changed).unwrap());
         let client = CatalogClient::with_transport_and_verifier(
             catalog_url,
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
@@ -753,7 +782,7 @@ mod tests {
             client.refresh(),
             Err(CatalogError::Signature(SigningError::VerificationFailed(_)))
         ));
-        assert!(!temp.path().join("cache/catalog.json").exists());
+        assert!(!temp.path().join("cache").exists());
     }
 
     #[test]
@@ -761,20 +790,67 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let transport = FakeTransport::default();
         let package_url = "https://example.com/tpms.vplugin";
-        transport.insert(package_url, b"package".to_vec());
+        let package = package();
+        transport.insert(package_url, package.clone());
         let client = CatalogClient::with_transport_and_verifier(
             "https://example.com/plugins.json",
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             transport,
             verifier(),
         );
 
         let (path, entry) = client
-            .download_plugin(&catalog(package_url), "tpms")
+            .download_plugin(&catalog(package_url, &package), "tpms")
             .unwrap();
         assert_eq!(entry.id, "tpms");
-        assert_eq!(fs::read(path).unwrap(), b"package");
+        assert_eq!(fs::read(path).unwrap(), package);
+    }
+
+    #[test]
+    fn package_download_rejects_a_hash_mismatch_before_installation() {
+        let temp = TempDir::new().unwrap();
+        let transport = FakeTransport::default();
+        let package_url = "https://example.com/tpms.vplugin";
+        transport.insert(package_url, b"tampered".to_vec());
+        let client = CatalogClient::with_transport_and_verifier(
+            "https://example.com/plugins.json",
+            temp.path().join("downloads"),
+            transport,
+            verifier(),
+        );
+
+        assert!(matches!(
+            client.download_plugin(&catalog(package_url, &package()), "tpms"),
+            Err(CatalogError::HashMismatch { .. })
+        ));
+        assert!(fs::read_dir(temp.path().join("downloads"))
+            .unwrap()
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn package_download_rejects_invalid_structure_before_stable_publish() {
+        let temp = TempDir::new().unwrap();
+        let transport = FakeTransport::default();
+        let package_url = "https://example.com/tpms.vplugin";
+        let invalid = b"not a vplugin".to_vec();
+        transport.insert(package_url, invalid.clone());
+        let client = CatalogClient::with_transport_and_verifier(
+            "https://example.com/plugins.json",
+            temp.path().join("downloads"),
+            transport,
+            verifier(),
+        );
+
+        assert!(matches!(
+            client.download_plugin(&catalog(package_url, &invalid), "tpms"),
+            Err(CatalogError::Package(_))
+        ));
+        assert!(fs::read_dir(temp.path().join("downloads"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[test]
@@ -782,7 +858,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let client = CatalogClient::with_transport_and_verifier(
             "http://example.com/plugins.json",
-            temp.path().join("cache/catalog.json"),
             temp.path().join("downloads"),
             FakeTransport::default(),
             verifier(),

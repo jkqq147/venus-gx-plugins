@@ -127,9 +127,11 @@ mod tests {
             schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: version.into(),
             runtime: Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
+                arguments: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),

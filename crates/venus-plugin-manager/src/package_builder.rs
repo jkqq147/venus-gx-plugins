@@ -133,7 +133,7 @@ fn validate_source_path(path: &Path) -> Result<(), BuildError> {
     });
     let allowed = match first {
         Some("manifest.json") => components.next().is_none(),
-        Some("bin" | "qml") => true,
+        Some("bin" | "qml" | "licenses") => true,
         _ => false,
     };
     if allowed {
@@ -144,7 +144,7 @@ fn validate_source_path(path: &Path) -> Result<(), BuildError> {
 }
 
 fn require_manifest_files(root: &Path, manifest: &PluginManifest) -> Result<(), BuildError> {
-    if let Runtime::NativeService { executable } = &manifest.runtime {
+    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
         require_file(root, executable)?;
     }
     for path in [&manifest.ui.settings_page, &manifest.ui.dashboard_component]
@@ -174,7 +174,7 @@ fn require_file(root: &Path, relative: &str) -> Result<(), BuildError> {
 
 fn executable_path(manifest: &PluginManifest) -> Option<&Path> {
     match &manifest.runtime {
-        Runtime::NativeService { executable } => Some(Path::new(executable)),
+        Runtime::NativeService { executable, .. } => Some(Path::new(executable)),
         Runtime::QmlOnly => None,
     }
 }
@@ -216,6 +216,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
         fs::create_dir_all(source.join("qml")).unwrap();
+        fs::create_dir_all(source.join("licenses")).unwrap();
         fs::write(
             source.join("manifest.json"),
             r#"{
@@ -230,6 +231,7 @@ mod tests {
         )
         .unwrap();
         fs::write(source.join("qml/PageDemo.qml"), "Item {}").unwrap();
+        fs::write(source.join("licenses/LICENSE.txt"), "Demo license").unwrap();
         let first = temp.path().join("first.vplugin");
         let second = temp.path().join("second.vplugin");
         let built = build_vplugin(&source, &first).unwrap();
@@ -248,6 +250,17 @@ mod tests {
             )
             .unwrap();
         assert!(registry.load().unwrap().plugins.contains_key("demo"));
+        let installed = &registry.load().unwrap().plugins["demo"];
+        assert_eq!(
+            fs::read_to_string(
+                registry
+                    .root()
+                    .join(&installed.install_path)
+                    .join("licenses/LICENSE.txt")
+            )
+            .unwrap(),
+            "Demo license"
+        );
     }
 
     #[test]

@@ -105,6 +105,7 @@ mod tests {
             schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
+            description: "Bluetooth tire pressure monitoring".into(),
             version: "0.1.0".into(),
             runtime,
             settings: PluginSettings {
@@ -118,6 +119,7 @@ mod tests {
         manifest(
             Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
+                arguments: Vec::new(),
             },
             PluginUi {
                 settings_page: Some("qml/PageTpmsSettings.qml".into()),
@@ -200,6 +202,7 @@ mod tests {
         let manifest = manifest(
             Runtime::NativeService {
                 executable: "bin/service".into(),
+                arguments: Vec::new(),
             },
             PluginUi::default(),
         );

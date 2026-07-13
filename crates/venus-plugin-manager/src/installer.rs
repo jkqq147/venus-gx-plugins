@@ -170,9 +170,7 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
         for directory in [
             config.app_root.join("bin"),
             config.app_root.join("backup"),
-            config.app_root.join("cache"),
             config.app_root.join("config"),
-            config.app_root.join("downloads"),
             config.app_root.join("services"),
             config.manager_service.clone(),
         ] {

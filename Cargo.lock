@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "venus-plugin-manager"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1031,8 +1031,8 @@ dependencies = [
 
 [[package]]
 name = "venus-tpms-ble"
-version = "0.1.0"
-source = "git+https://github.com/jkqq147/venus-tpms-ble.git?rev=af21ad8d846b454b01ec26efafbabef8dc8a4a60#af21ad8d846b454b01ec26efafbabef8dc8a4a60"
+version = "0.1.2"
+source = "git+https://github.com/jkqq147/venus-tpms-ble.git?rev=dbb46a53808dd09c792acb28b4e7e7ed0e9adf1c#dbb46a53808dd09c792acb28b4e7e7ed0e9adf1c"
 dependencies = [
  "libc",
  "serde",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "venus-tpms-plugin"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "venus-tpms-ble",
 ]

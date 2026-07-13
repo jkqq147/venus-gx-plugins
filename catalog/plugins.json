@@ -1,16 +1,31 @@
 {
-  "schema": 1,
+  "schema": 2,
   "plugins": [
     {
       "id": "tpms",
       "name": "TPMS",
-      "version": "0.1.1",
+      "description": "通过蓝牙读取轮胎压力和温度，并显示在 GX Dashboard。",
+      "version": "0.1.2",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.10/tpms-0.1.1.vplugin",
-        "sha256": "24541adefef77776836eedff2d21ff8271f8e228f34d6f05101308b2d152ea51",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.11/tpms-0.1.2.vplugin",
+        "sha256": "466cb1830b58e040a41f36d1a691fe7c3d3dd2c3a20e36091decbe5aa2bd4fab",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "VsZkEqG2QVidybnerwnKQXdm63fUc/Qg9OEc4Gf8BEr3HWIDquGXenEvyGsb0tjHZXqYReBbSE9FLNDDs2HYCQ=="
+          "ed25519": "dmGBFfC6mzDTsmV1nFiZuzjibEIrKQAOoVP+AQSDTFOQpsZx6s6+LsgajnL1rdicJLFYra77bhipDJkKfmTICw=="
+        }
+      }
+    },
+    {
+      "id": "rathole",
+      "name": "Rathole",
+      "description": "通过安全隧道远程访问 GX 设备，配置由用户通过 SSH 管理。",
+      "version": "0.1.1",
+      "package": {
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.11/rathole-0.1.1.vplugin",
+        "sha256": "d72e2892772afca2e88dd7c1aeeca7d9c09a6655aa9c5a4c6b03fbabf129d5de",
+        "signature": {
+          "key_id": "release-2026-01",
+          "ed25519": "p1LC8WV0XLzgA0B+ir9bJ1Yk3pBeDfuBGcqJ/Fc9GBGpMNurflCXosKTBVGncCwKRL/jZalhGzG9x771GvnrDw=="
         }
       }
     }
