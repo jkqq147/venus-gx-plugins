@@ -219,6 +219,8 @@ fn validate_version(version: &str) -> Result<(), ContractError> {
 
 fn is_safe_relative_path(path: &str, prefix: &str) -> bool {
     path.starts_with(prefix)
+        && !path.contains('\\')
+        && !path.bytes().any(|byte| byte.is_ascii_control())
         && !path.contains("//")
         && !path
             .split('/')
@@ -293,6 +295,18 @@ mod tests {
         manifest.runtime = Runtime::QmlOnly;
         manifest.ui = PluginUi::default();
         assert_eq!(manifest.validate(), Err(ContractError::MissingQmlUi));
+    }
+
+    #[test]
+    fn rejects_qml_paths_that_cannot_be_safely_published() {
+        for path in ["qml/Overview\\Injected.qml", "qml/Overview\nInjected.qml"] {
+            let mut manifest = manifest();
+            manifest.ui.dashboard_component = Some(path.into());
+            assert_eq!(
+                manifest.validate(),
+                Err(ContractError::InvalidQmlPath(path.into()))
+            );
+        }
     }
 
     #[test]

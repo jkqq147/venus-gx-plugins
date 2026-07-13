@@ -44,6 +44,11 @@ plugin.vplugin
 
 Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并真实存在。Enabled 路径必须严格等于 `/Settings/Plugins/<plugin-id>/Enabled`。
 
+- `settings_page`：Manager 为已启用插件在 Device List 生成直接入口，点击后加载该业务页面。
+- `dashboard_component`：Manager 将已启用插件的组件直接加入 Venus 主 Dashboard 轮播。
+
+插件只提供组件，不修改 `PageMain.qml` 或 `main.qml`，也不自行创建菜单入口。关闭插件后，两类入口都会随服务一起隐藏；重新启用时由 Manager 恢复。
+
 插件 QML 从独立的 Package Store 加载。使用 `MbPage`、`OverviewPage` 等 Venus GUI 类型的文件必须显式导入宿主目录：
 
 ```qml

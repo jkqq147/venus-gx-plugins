@@ -29,7 +29,8 @@ cloud "Cloudflare Pages\n静态目录与版本化文件" as CDN #dae8fc
 node "CCGX\nVenus OS v3.55 · armv7l" as CCGX {
     package "Manager 管理的界面" as ManagerUi #dae8fc {
         component "Settings > Plugins\n管理页面" as ManagementPage
-        component "Plugin UI Host\n业务页面与 Dashboard" as UiHost
+        component "Device List\n插件直达入口" as DeviceEntries
+        component "主 Dashboard\n插件概览组件" as Dashboards
     }
 
     package "Plugin Manager" as Manager #d5e8d4 {
@@ -62,7 +63,8 @@ node "CCGX\nVenus OS v3.55 · armv7l" as CCGX {
 }
 
 User --> ManagementPage : 管理插件
-User --> UiHost : 使用插件页面
+User --> DeviceEntries : 打开业务页面
+User --> Dashboards : 查看实时概览
 User ..> PluginConfig : 必要时通过 SSH 编辑
 
 ManagementPage <--> ManagerApi : 命令与状态
@@ -88,9 +90,11 @@ ManagerApi --> VenusSettings : 写入用户选择
 VenusSettings --> Reconciler : 唯一期望状态
 LocalRegistry --> Reconciler : 已安装状态
 Reconciler --> Runit : 启动或停止
-Reconciler --> UiHost : 显示或隐藏
+Reconciler --> DeviceEntries : 发布或移除入口
+Reconciler --> Dashboards : 发布或移除组件
 
-UiHost --> PluginQml : 动态加载
+DeviceEntries --> PluginQml : 加载 settings_page
+Dashboards --> PluginQml : 加载 dashboard_component
 Runit --> NativePlugin : 运行 native-service
 NativePlugin --> PluginConfig : 读取配置
 NativePlugin --> BluezDbus : BLE 扫描等设备能力
@@ -98,8 +102,8 @@ NativePlugin --> VenusDbus : 发布业务数据
 PluginQml --> VenusDbus : 显示业务数据
 
 note bottom of ManagerUi
-Plugin Manager 是唯一可以修改
-Venus OS 主菜单和插件入口的组件。
+Plugin Manager 是唯一可以修改 Venus OS
+主菜单、Device List 和 Dashboard 挂载点的组件。
 end note
 
 note bottom of State
@@ -129,7 +133,7 @@ end note
 
 ## 运行时收敛
 
-Plugin Manager 通过 Venus D-Bus 发布目录、状态和管理命令。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。
+Plugin Manager 通过 Venus D-Bus 发布目录、状态、管理命令和已启用插件的 UI 声明。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。Manager 在 `PageMain.qml` 中只保留一个通用 Device List 模型挂载点，在 `main.qml` 中只保留一个通用 Dashboard 控制器；插件的 Settings 页面和 Dashboard 组件均从不可变 Package Store 动态加载，不允许插件自行修改系统 QML。
 
 CCGX 只访问固定的 Cloudflare Pages 下载域名。GitHub Release 发布后，自动化会把目录和版本化文件同步为 Pages 静态资产；设备请求不再实时回源 GitHub。目录只接受 HTTPS，刷新时严格校验 schema、URL、SHA-256 格式和 Ed25519 签名；只有完整有效的目录才会原子替换本地缓存。安装包下载后还会重新校验大小、SHA-256、manifest 和归档内容，Cloudflare 不成为新的信任来源。
 

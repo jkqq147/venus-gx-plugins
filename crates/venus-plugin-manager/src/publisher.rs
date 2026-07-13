@@ -54,7 +54,8 @@ impl ManagerPublisher {
             ("/CatalogStatus", "尚未刷新"),
             ("/InstalledIds", ""),
             ("/AvailableIds", ""),
-            ("/DashboardIds", ""),
+            ("/DeviceEntryIds", ""),
+            ("/DashboardSources", ""),
             ("/LastError", ""),
             ("/Manager/InstalledVersion", env!("CARGO_PKG_VERSION")),
             ("/Manager/AvailableVersion", ""),
@@ -131,18 +132,11 @@ impl ManagerPublisher {
             .filter(|plugin| plugin.available)
             .map(|plugin| plugin.id.as_str())
             .collect();
-        let dashboards: Vec<_> = snapshot
-            .plugins
-            .iter()
-            .filter(|plugin| {
-                plugin.installed && plugin.enabled && !plugin.dashboard_component.is_empty()
-            })
-            .map(|plugin| plugin.id.as_str())
-            .collect();
         self.string("/CatalogStatus", &snapshot.catalog_state.text())?;
         self.string("/InstalledIds", &installed.join(","))?;
         self.string("/AvailableIds", &available.join(","))?;
-        self.string("/DashboardIds", &dashboards.join(","))?;
+        self.string("/DeviceEntryIds", &device_entry_ids(&snapshot.plugins))?;
+        self.string("/DashboardSources", &dashboard_sources(&snapshot.plugins))?;
         self.string("/LastError", last_error)?;
         self.string("/Manager/InstalledVersion", &manager.installed_version)?;
         self.string("/Manager/AvailableVersion", &manager.available_version)?;
@@ -373,6 +367,26 @@ fn plugin_key_from_item_path(path: &str) -> Option<&str> {
         .map(|(key, _)| key)
 }
 
+fn device_entry_ids(plugins: &[PluginSnapshot]) -> String {
+    plugins
+        .iter()
+        .filter(|plugin| plugin.installed && plugin.enabled && !plugin.settings_page.is_empty())
+        .map(|plugin| plugin.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn dashboard_sources(plugins: &[PluginSnapshot]) -> String {
+    plugins
+        .iter()
+        .filter(|plugin| {
+            plugin.installed && plugin.enabled && !plugin.dashboard_component.is_empty()
+        })
+        .map(|plugin| plugin.dashboard_component.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn lifecycle_text(state: LifecycleState) -> &'static str {
     match state {
         LifecycleState::Disabled => "disabled",
@@ -393,7 +407,33 @@ fn service_text(state: ServiceState) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::plugin_key_from_item_path;
+    use plugin_manager_core::{LifecycleState, ServiceState};
+
+    use super::{dashboard_sources, device_entry_ids, plugin_key_from_item_path, PluginSnapshot};
+
+    fn plugin(id: &str, enabled: bool) -> PluginSnapshot {
+        PluginSnapshot {
+            id: id.into(),
+            path_key: id.replace('-', "_"),
+            name: id.into(),
+            installed: true,
+            available: true,
+            enabled,
+            installed_version: "0.1.0".into(),
+            catalog_version: "0.1.0".into(),
+            has_update: false,
+            service_state: ServiceState::Running,
+            lifecycle: LifecycleState::Enabled,
+            status: "已启用".into(),
+            error: String::new(),
+            settings_page: format!(
+                "/data/venus-gx-plugins/state/plugins/{id}/payload/qml/Page.qml"
+            ),
+            dashboard_component: format!(
+                "/data/venus-gx-plugins/state/plugins/{id}/payload/qml/Overview.qml"
+            ),
+        }
+    }
 
     #[test]
     fn identifies_only_dynamic_plugin_item_paths() {
@@ -403,5 +443,30 @@ mod tests {
         );
         assert_eq!(plugin_key_from_item_path("/InstalledCount"), None);
         assert_eq!(plugin_key_from_item_path("/Plugins/tpms"), None);
+    }
+
+    #[test]
+    fn publishes_only_enabled_installed_ui_entries() {
+        let plugins = vec![plugin("a", true), plugin("b", false)];
+        assert_eq!(device_entry_ids(&plugins), "a");
+        assert_eq!(
+            dashboard_sources(&plugins),
+            "/data/venus-gx-plugins/state/plugins/a/payload/qml/Overview.qml"
+        );
+    }
+
+    #[test]
+    fn omits_missing_ui_components_independently() {
+        let mut settings_only = plugin("settings-only", true);
+        settings_only.dashboard_component.clear();
+        let mut dashboard_only = plugin("dashboard-only", true);
+        dashboard_only.settings_page.clear();
+        let plugins = vec![settings_only, dashboard_only];
+
+        assert_eq!(device_entry_ids(&plugins), "settings-only");
+        assert_eq!(
+            dashboard_sources(&plugins),
+            "/data/venus-gx-plugins/state/plugins/dashboard-only/payload/qml/Overview.qml"
+        );
     }
 }

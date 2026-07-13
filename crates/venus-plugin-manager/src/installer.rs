@@ -20,8 +20,12 @@ use crate::publisher::SERVICE_NAME;
 const BUS_ITEM_INTERFACE: &str = "com.victronenergy.BusItem";
 const SETTINGS_BEGIN: &str = "// BEGIN venus-plugin-manager-settings";
 const SETTINGS_END: &str = "// END venus-plugin-manager-settings";
-const DASHBOARD_BEGIN: &str = "// BEGIN venus-plugin-manager-dashboards";
-const DASHBOARD_END: &str = "// END venus-plugin-manager-dashboards";
+const LEGACY_DASHBOARD_BEGIN: &str = "// BEGIN venus-plugin-manager-dashboards";
+const LEGACY_DASHBOARD_END: &str = "// END venus-plugin-manager-dashboards";
+const DEVICE_ENTRIES_BEGIN: &str = "// BEGIN venus-plugin-manager-device-entries";
+const DEVICE_ENTRIES_END: &str = "// END venus-plugin-manager-device-entries";
+const OVERVIEWS_BEGIN: &str = "// BEGIN venus-plugin-manager-overviews";
+const OVERVIEWS_END: &str = "// END venus-plugin-manager-overviews";
 const RC_BEGIN: &str = "# BEGIN venus-plugin-manager";
 const RC_END: &str = "# END venus-plugin-manager";
 
@@ -35,22 +39,20 @@ const SETTINGS_BLOCK: &str = r#"
 
 "#;
 
-const DASHBOARD_BLOCK: &str = r#"
-			// BEGIN venus-plugin-manager-dashboards
-			MbItemText {
-				show: false
-				text: ""
-				property VBusItem pluginManagerGuiReady: VBusItem { bind: "com.victronenergy.pluginmanager/Gui/Ready" }
-				Component.onCompleted: pluginManagerGuiReady.setValue(1)
-			}
+const DEVICE_ENTRIES_BLOCK: &str = r#"
+		// BEGIN venus-plugin-manager-device-entries
+		PluginDeviceEntriesModel {}
+		// END venus-plugin-manager-device-entries
 
-			MbSubMenu {
-				description: qsTr("Plugin dashboards")
-				property VBusItem dashboardIds: VBusItem { bind: "com.victronenergy.pluginmanager/DashboardIds" }
-				show: dashboardIds.valid && dashboardIds.value !== ""
-				subpage: Component { PagePluginDashboards {} }
-			}
-			// END venus-plugin-manager-dashboards
+"#;
+
+const OVERVIEWS_BLOCK: &str = r#"
+	// BEGIN venus-plugin-manager-overviews
+	PluginDashboardController {
+		overviewModel: overviewModel
+		onAddDashboard: extraOverview(source, true)
+	}
+	// END venus-plugin-manager-overviews
 
 "#;
 
@@ -68,14 +70,16 @@ const QML_FILES: &[(&str, &str)] = &[
         include_str!("../../../ui/qml/PagePluginDetails.qml"),
     ),
     (
-        "PagePluginDashboards.qml",
-        include_str!("../../../ui/qml/PagePluginDashboards.qml"),
+        "PluginDeviceEntriesModel.qml",
+        include_str!("../../../ui/qml/PluginDeviceEntriesModel.qml"),
     ),
     (
-        "PagePluginDashboardHost.qml",
-        include_str!("../../../ui/qml/PagePluginDashboardHost.qml"),
+        "PluginDashboardController.qml",
+        include_str!("../../../ui/qml/PluginDashboardController.qml"),
     ),
 ];
+
+const OBSOLETE_QML_FILES: &[&str] = &["PagePluginDashboards.qml", "PagePluginDashboardHost.qml"];
 
 #[derive(Debug, Error)]
 pub enum InstallerError {
@@ -136,9 +140,14 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
     let service_link = config.service_root.join("venus-plugin-manager");
     let settings_page = config.gui_qml_root.join("PageSettings.qml");
     let main_page = config.gui_qml_root.join("PageMain.qml");
+    let overview_main = config.gui_qml_root.join("main.qml");
     let qml_paths: Vec<_> = QML_FILES
         .iter()
         .map(|(name, _)| config.gui_qml_root.join(name))
+        .collect();
+    let obsolete_qml_paths: Vec<_> = OBSOLETE_QML_FILES
+        .iter()
+        .map(|name| config.gui_qml_root.join(name))
         .collect();
 
     let mut file_paths = vec![
@@ -147,8 +156,10 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
         config.rc_local.clone(),
         settings_page.clone(),
         main_page.clone(),
+        overview_main.clone(),
     ];
     file_paths.extend(qml_paths.iter().cloned());
+    file_paths.extend(obsolete_qml_paths.iter().cloned());
     let backups = file_paths
         .iter()
         .map(|path| FileBackup::capture(path))
@@ -178,6 +189,10 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
             &main_page,
             &config.app_root.join("backup/PageMain.qml.v3.55.original"),
         )?;
+        backup_once(
+            &overview_main,
+            &config.app_root.join("backup/main.qml.v3.55.original"),
+        )?;
 
         let current_exe =
             env::current_exe().map_err(|source| io_error("current executable", source))?;
@@ -192,6 +207,9 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
         for ((_, contents), path) in QML_FILES.iter().zip(&qml_paths) {
             write_atomic(path, contents.as_bytes(), 0o644)?;
         }
+        for path in &obsolete_qml_paths {
+            remove_file_if_exists(path)?;
+        }
 
         patch_file(
             &settings_page,
@@ -200,12 +218,20 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
             "\n\t\tMbSubMenu {\n\t\t\tdescription: \"Debug\"",
             SETTINGS_BLOCK,
         )?;
+        remove_block_if_present(&main_page, LEGACY_DASHBOARD_BEGIN, LEGACY_DASHBOARD_END)?;
         patch_file(
             &main_page,
-            DASHBOARD_BEGIN,
-            DASHBOARD_END,
-            "\n\t\t\tMbSubMenu {\n\t\t\t\tdescription: qsTr(\"Settings\")",
-            DASHBOARD_BLOCK,
+            DEVICE_ENTRIES_BEGIN,
+            DEVICE_ENTRIES_END,
+            "\n\t\tVisibleItemModel {",
+            DEVICE_ENTRIES_BLOCK,
+        )?;
+        patch_file(
+            &overview_main,
+            OVERVIEWS_BEGIN,
+            OVERVIEWS_END,
+            "\n\tListModel {\n\t\tid: overviewModel",
+            OVERVIEWS_BLOCK,
         )?;
 
         let rc = match fs::read_to_string(&config.rc_local) {
@@ -312,6 +338,15 @@ fn patch_file(
     write_atomic(path, patched.as_bytes(), 0o644)
 }
 
+fn remove_block_if_present(path: &Path, begin: &str, end: &str) -> Result<(), InstallerError> {
+    let contents = fs::read_to_string(path).map_err(|source| io_error(path, source))?;
+    if !contents.contains(begin) && !contents.contains(end) {
+        return Ok(());
+    }
+    let patched = replace_block(path, &contents, begin, end, "")?;
+    write_atomic(path, patched.as_bytes(), 0o644)
+}
+
 fn replace_or_append_block(
     path: &Path,
     contents: &str,
@@ -359,6 +394,17 @@ fn backup_once(source: &Path, destination: &Path) -> Result<(), InstallerError> 
     }
     let contents = fs::read(source).map_err(|source_error| io_error(source, source_error))?;
     write_atomic(destination, &contents, 0o644)
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), InstallerError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {
+            fs::remove_file(path).map_err(|source| io_error(path, source))
+        }
+        Ok(_) => Err(InstallerError::OwnershipConflict(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(io_error(path, source)),
+    }
 }
 
 fn ensure_owned_link(link: &Path, target: &Path) -> Result<(), InstallerError> {
@@ -630,6 +676,65 @@ mod tests {
         assert_eq!(contents.matches(SETTINGS_BEGIN).count(), 1);
         assert_eq!(contents.matches(SETTINGS_END).count(), 1);
         assert!(contents.contains("// custom entry"));
+    }
+
+    #[test]
+    fn migrates_the_device_list_to_a_single_dynamic_mount() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("PageMain.qml");
+        fs::write(
+            &path,
+            "MbPage {\n\tmodel: VisualModels {\n\t\tVisualDataModel {}\n\t\tVisibleItemModel {\n\t\t\t// BEGIN venus-plugin-manager-dashboards\n\t\t\tMbSubMenu {}\n\t\t\t// END venus-plugin-manager-dashboards\n\t\t\t// unrelated entry\n\t\t}\n\t}\n}\n",
+        )
+        .unwrap();
+
+        remove_block_if_present(&path, LEGACY_DASHBOARD_BEGIN, LEGACY_DASHBOARD_END).unwrap();
+        for _ in 0..2 {
+            patch_file(
+                &path,
+                DEVICE_ENTRIES_BEGIN,
+                DEVICE_ENTRIES_END,
+                "\n\t\tVisibleItemModel {",
+                DEVICE_ENTRIES_BLOCK,
+            )
+            .unwrap();
+        }
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(!contents.contains(LEGACY_DASHBOARD_BEGIN));
+        assert_eq!(contents.matches(DEVICE_ENTRIES_BEGIN).count(), 1);
+        assert_eq!(contents.matches(DEVICE_ENTRIES_END).count(), 1);
+        assert!(contents.contains("PluginDeviceEntriesModel {}"));
+        assert!(contents.contains("// unrelated entry"));
+    }
+
+    #[test]
+    fn mounts_dashboard_controller_once_without_replacing_native_overviews() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("main.qml");
+        fs::write(
+            &path,
+            "PageStackWindow {\n\t// native content\n\tListModel {\n\t\tid: overviewModel\n\t\tListElement { pageSource: \"OverviewHub.qml\" }\n\t}\n}\n",
+        )
+        .unwrap();
+
+        for _ in 0..2 {
+            patch_file(
+                &path,
+                OVERVIEWS_BEGIN,
+                OVERVIEWS_END,
+                "\n\tListModel {\n\t\tid: overviewModel",
+                OVERVIEWS_BLOCK,
+            )
+            .unwrap();
+        }
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(contents.matches(OVERVIEWS_BEGIN).count(), 1);
+        assert_eq!(contents.matches(OVERVIEWS_END).count(), 1);
+        assert!(contents.contains("PluginDashboardController"));
+        assert!(contents.contains("OverviewHub.qml"));
+        assert!(contents.contains("// native content"));
     }
 
     #[test]

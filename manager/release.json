@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "binary": {
-    "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.7/venus-plugin-manager-armv7.bin",
-    "sha256": "2175b8247da47704cac4b6d0019dbf0edf188d612141adc37433cfde43f33cbe",
+    "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.8/venus-plugin-manager-armv7.bin",
+    "sha256": "6e37bd19f14ee666dac8a8f0714257b5d05666411766746651e79125913a143e",
     "signature": {
       "key_id": "release-2026-01",
-      "ed25519": "9s/PpOBQQ3mBlnbS7SJHKkOJs4vRnEkZT0r4CoyARklt8ELzmnZEr5GZxQ4H5kGdi6gzBa/qtdakQnMcIWooCQ=="
+      "ed25519": "7PK2zaKVuQMX31jj+m+hX2Syrb+E2EVQZg69HVN70E2J5zkqfVsSvEaX2Q3b4hPvAJgI7YVEtx79qwdrZD+sDw=="
     }
   }
 }
