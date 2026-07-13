@@ -11,7 +11,7 @@ cp manager/release.json "$output/manager/release.json"
 cp infra/cloudflare/_headers "$output/_headers"
 
 gh api --paginate "repos/${GITHUB_REPOSITORY:-jkqq147/venus-gx-plugins}/releases?per_page=100" \
-	--jq '.[] | select(.draft == false) | .tag_name as $tag | .assets[] | select(.name == "venus-plugin-manager-armv7" or (.name | endswith(".vplugin"))) | [$tag, .name, .url] | @tsv' \
+	--jq '.[] | select(.draft == false) | .tag_name as $tag | .assets[] | select(.name == "venus-plugin-manager-armv7" or .name == "venus-plugin-manager-armv7.bin" or (.name | endswith(".vplugin"))) | [$tag, .name, .url] | @tsv' \
 	> "$assets_file"
 
 while IFS=$'\t' read -r tag name asset_url; do
