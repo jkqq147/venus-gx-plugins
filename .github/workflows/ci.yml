@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --check
+      - run: cargo test --locked
+      - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/tpms/manifest.json
+      - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/rathole/manifest.json
+      - run: cargo run --locked --bin venus-plugin-manager -- validate-catalog catalog/plugins.json

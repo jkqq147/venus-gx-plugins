@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "tpms",
+  "name": "TPMS",
+  "version": "0.1.0",
+  "runtime": {
+    "kind": "native-service",
+    "executable": "bin/venus-tpms-ble"
+  },
+  "settings": {
+    "enabled_path": "/Settings/Plugins/tpms/Enabled"
+  },
+  "ui": {
+    "settings_page": "qml/PageTpmsSettings.qml",
+    "dashboard_component": "qml/OverviewTpms.qml"
+  }
+}

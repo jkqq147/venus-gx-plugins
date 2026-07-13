@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "rathole",
+  "name": "Rathole",
+  "version": "0.1.1",
+  "runtime": {
+    "kind": "native-service",
+    "executable": "bin/venus-rathole"
+  },
+  "settings": {
+    "enabled_path": "/Settings/Plugins/rathole/Enabled"
+  },
+  "ui": {
+    "settings_page": "qml/PageRatholeSettings.qml"
+  }
+}

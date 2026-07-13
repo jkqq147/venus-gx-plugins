@@ -1,0 +1,6 @@
+/target/
+.agents/
+skills-lock.json
+*.vplugin
+*.sha256
+.DS_Store
