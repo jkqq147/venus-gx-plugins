@@ -67,7 +67,7 @@ VENUS_PLUGIN_ID=<plugin-id>
 VENUS_PLUGIN_CONFIG_DIR=/data/venus-gx-plugins/config/<plugin-id>
 ```
 
-配置目录由 Manager 创建并强制使用 `0700` 权限。插件只能把需要跨升级、重装或重启保留的数据写入该目录，并应使用临时文件加原子重命名更新配置。包内 payload、runit 服务目录和临时下载目录都不能作为持久配置位置。
+配置目录由 Manager 创建并强制使用 `0700` 权限。Manager 以 `umask 077` 启动插件服务，因此插件新建的配置文件默认只有当前用户可读写。插件只能把需要跨升级、重装或重启保留的数据写入该目录，并应使用临时文件加原子重命名更新配置。包内 payload、runit 服务目录和临时下载目录都不能作为持久配置位置。
 
 Manager 不解析配置内容，也不保存配置 schema。配置格式的兼容和升级由插件自身负责。例如 TPMS 使用 `config/tpms/state.json`，Rathole 使用 `config/rathole/client.toml`。
 

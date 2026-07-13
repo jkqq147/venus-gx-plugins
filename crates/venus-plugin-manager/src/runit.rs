@@ -201,7 +201,7 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
         let config = self.ensure_config_directory(&plugin.manifest.id)?;
         let binary = self.state_root.join(&plugin.install_path).join(executable);
         let script = format!(
-            "#!/bin/sh\nset -eu\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\nexec {}\n",
+            "#!/bin/sh\nset -eu\numask 077\nexport VENUS_PLUGIN_ID={}\nexport VENUS_PLUGIN_CONFIG_DIR={}\nexec {}\n",
             shell_quote(&plugin.manifest.id),
             shell_quote(&config.to_string_lossy()),
             shell_quote(&binary.to_string_lossy())
@@ -419,6 +419,7 @@ mod tests {
         assert!(definition.join("down").is_file());
         let script = fs::read_to_string(definition.join("run")).unwrap();
         assert!(script.contains("state/plugins/tpms"));
+        assert!(script.contains("\numask 077\n"));
         assert!(script.contains("VENUS_PLUGIN_CONFIG_DIR"));
         assert_eq!(
             fs::metadata(temp.path().join("config/tpms"))
