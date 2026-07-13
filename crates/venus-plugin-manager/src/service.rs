@@ -18,8 +18,7 @@ use crate::{
 };
 
 pub const DEFAULT_APP_ROOT: &str = "/data/venus-gx-plugins";
-pub const DEFAULT_CATALOG_URL: &str =
-    "https://raw.githubusercontent.com/jkqq147/venus-gx-plugins/master/catalog/plugins.json";
+pub const DEFAULT_CATALOG_URL: &str = "https://venus-gx-plugins.pages.dev/catalog/plugins.json";
 
 type SystemEngine =
     ManagerEngine<VenusSettings, RunitRuntime<SystemRunitController>, SystemHttpTransport>;

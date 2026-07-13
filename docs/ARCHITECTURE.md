@@ -17,10 +17,12 @@ skinparam defaultFontName Arial
 
 actor "用户" as User
 
-cloud "GitHub" as GitHub #e1d5e7 {
+cloud "GitHub 源站" as GitHub #e1d5e7 {
     artifact "HTTPS 插件目录\nplugins.json" as RemoteCatalog
     artifact "Release 插件包\n*.vplugin" as RemotePackages
 }
+
+cloud "Cloudflare Pages\n静态目录与版本化文件" as CDN #dae8fc
 
 node "CCGX\nVenus OS v3.55 · armv7l" as CCGX {
     package "Manager 管理的界面" as ManagerUi #dae8fc {
@@ -61,8 +63,9 @@ User ..> PluginConfig : 必要时通过 SSH 编辑
 
 ManagementPage <--> ManagerApi : 命令与状态
 ManagerApi --> CatalogClient : 用户点击 Refresh
-CatalogClient --> RemoteCatalog : HTTPS 获取并校验
-CatalogClient --> RemotePackages : 安装时下载
+CatalogClient --> CDN : HTTPS 获取
+RemoteCatalog --> CDN : 发布时同步 · 短缓存
+RemotePackages --> CDN : 发布时同步 · 长缓存
 CatalogClient --> CatalogCache : 成功后替换缓存
 CatalogCache --> CatalogClient : 断网时读取
 
@@ -117,6 +120,6 @@ end note
 
 Plugin Manager 通过 Venus D-Bus 发布目录、状态和管理命令。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。
 
-目录只接受 HTTPS，刷新时严格校验 schema、URL、SHA-256 格式和 Ed25519 签名；只有完整有效的目录才会原子替换本地缓存。安装包下载后还会重新校验大小、SHA-256、manifest 和归档内容。
+CCGX 只访问固定的 Cloudflare Pages 下载域名。GitHub Release 发布后，自动化会把目录和版本化文件同步为 Pages 静态资产；设备请求不再实时回源 GitHub。目录只接受 HTTPS，刷新时严格校验 schema、URL、SHA-256 格式和 Ed25519 签名；只有完整有效的目录才会原子替换本地缓存。安装包下载后还会重新校验大小、SHA-256、manifest 和归档内容，Cloudflare 不成为新的信任来源。
 
 Plugin Manager 自身使用静态 ARMv7 二进制安装。安装器只修改带有自身标记的 QML 区块和 runit 链接，更新失败时恢复原文件与服务状态。

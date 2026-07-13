@@ -1,0 +1,36 @@
+name: Publish Cloudflare Pages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build static distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/build-pages-dist.sh
+      - name: Deploy Cloudflare Pages
+        env:
+          CLOUDFLARE_ACCOUNT_ID: fa5223edfda9c622d62a6c1f12d05e13
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
+        run: >-
+          npx --yes wrangler@4 pages deploy dist/pages
+          --project-name venus-gx-plugins
+          --branch master
+          --commit-hash "$GITHUB_SHA"
+          --commit-dirty=false

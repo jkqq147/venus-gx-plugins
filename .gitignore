@@ -1,4 +1,6 @@
 /target/
+/dist/
+.wrangler/
 .agents/
 skills-lock.json
 *.vplugin
