@@ -37,6 +37,13 @@ const SETTINGS_BLOCK: &str = r#"
 
 const DASHBOARD_BLOCK: &str = r#"
 			// BEGIN venus-plugin-manager-dashboards
+			MbItemText {
+				show: false
+				text: ""
+				property VBusItem pluginManagerGuiReady: VBusItem { bind: "com.victronenergy.pluginmanager/Gui/Ready" }
+				Component.onCompleted: pluginManagerGuiReady.setValue(1)
+			}
+
 			MbSubMenu {
 				description: qsTr("Plugin dashboards")
 				property VBusItem dashboardIds: VBusItem { bind: "com.victronenergy.pluginmanager/DashboardIds" }
@@ -228,8 +235,15 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
         if !wait_for_manager(Duration::from_secs(15)) {
             return Err(InstallerError::ManagerHealth);
         }
+        set_manager_gui_ready(false)?;
+        if !wait_for_gui_ready_value(false, Duration::from_secs(2)) {
+            return Err(InstallerError::ManagerHealth);
+        }
         run_command("svc", &["-t", "/service/gui"])?;
         if !wait_for_service("/service/gui", Duration::from_secs(15)) {
+            return Err(InstallerError::GuiHealth);
+        }
+        if !wait_for_gui_ready_value(true, Duration::from_secs(20)) {
             return Err(InstallerError::GuiHealth);
         }
         Ok(())
@@ -405,6 +419,56 @@ fn wait_for_manager(timeout: Duration) -> bool {
             return true;
         }
         thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
+fn set_manager_gui_ready(ready: bool) -> Result<(), InstallerError> {
+    let connection = Connection::system().map_err(|error| InstallerError::Command {
+        command: "connect to system D-Bus".into(),
+        message: error.to_string(),
+    })?;
+    let proxy = Proxy::new(&connection, SERVICE_NAME, "/Gui/Ready", BUS_ITEM_INTERFACE).map_err(
+        |error| InstallerError::Command {
+            command: "open Plugin Manager GUI readiness item".into(),
+            message: error.to_string(),
+        },
+    )?;
+    let result = proxy
+        .call::<_, _, i32>("SetValue", &(OwnedValue::from(i32::from(ready)),))
+        .map_err(|error| InstallerError::Command {
+            command: "reset Plugin Manager GUI readiness".into(),
+            message: error.to_string(),
+        })?;
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(InstallerError::Command {
+            command: "reset Plugin Manager GUI readiness".into(),
+            message: format!("D-Bus result {result}"),
+        })
+    }
+}
+
+fn wait_for_gui_ready_value(expected: bool, timeout: Duration) -> bool {
+    let Ok(connection) = Connection::system() else {
+        return false;
+    };
+    let Ok(proxy) = Proxy::new(&connection, SERVICE_NAME, "/Gui/Ready", BUS_ITEM_INTERFACE) else {
+        return false;
+    };
+    let expected = i32::from(expected);
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if proxy
+            .call::<_, _, OwnedValue>("GetValue", &())
+            .ok()
+            .and_then(|value| i32::try_from(value).ok())
+            == Some(expected)
+        {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
     }
     false
 }

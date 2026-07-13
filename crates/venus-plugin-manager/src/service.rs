@@ -120,11 +120,16 @@ fn execute_command(
     publisher: &mut ManagerPublisher,
     command: ManagerCommand,
 ) -> Result<String, ServiceError> {
+    if let ManagerCommand::SetGuiReady(ready) = command {
+        publisher.set_gui_ready(ready)?;
+        return Ok(String::new());
+    }
     let before = engine.snapshot()?;
     publisher.publish(&before, &updater.snapshot(), true, "")?;
     let result: Result<(), String> = match command {
         ManagerCommand::Refresh => refresh(engine, updater),
         ManagerCommand::UpdateManager => updater.apply().map_err(|error| error.to_string()),
+        ManagerCommand::SetGuiReady(_) => unreachable!("GUI readiness is handled above"),
         ManagerCommand::Install(id) => engine
             .install(&id)
             .map(|_| ())

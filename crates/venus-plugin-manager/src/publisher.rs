@@ -18,6 +18,7 @@ pub const SERVICE_NAME: &str = "com.victronenergy.pluginmanager";
 pub enum ManagerCommand {
     Refresh,
     UpdateManager,
+    SetGuiReady(bool),
     Install(String),
     SetEnabled(String, bool),
     Uninstall(String),
@@ -89,6 +90,18 @@ impl ManagerPublisher {
                 sender.send(ManagerCommand::UpdateManager).map_or(2, |_| 0)
             }),
         )?;
+        let sender = publisher.commands.clone();
+        publisher.add(
+            "/Gui/Ready",
+            BusItem::writable_i32(0, move |value| {
+                if value != 0 && value != 1 {
+                    return 2;
+                }
+                sender
+                    .send(ManagerCommand::SetGuiReady(value == 1))
+                    .map_or(2, |_| 0)
+            }),
+        )?;
 
         publisher.connection.request_name(SERVICE_NAME)?;
         Ok(publisher)
@@ -144,6 +157,10 @@ impl ManagerPublisher {
             self.publish_plugin(plugin)?;
         }
         Ok(())
+    }
+
+    pub fn set_gui_ready(&self, ready: bool) -> zbus::Result<()> {
+        self.i32("/Gui/Ready", i32::from(ready))
     }
 
     fn remove_missing_plugins(&mut self, plugins: &[PluginSnapshot]) -> zbus::Result<()> {
