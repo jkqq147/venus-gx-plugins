@@ -15,14 +15,29 @@ VisualDataModel {
 		property string pluginRoot: "com.victronenergy.pluginmanager/Plugins/" + pluginKey
 		property VBusItem pluginName: VBusItem { bind: pluginEntry.pluginRoot + "/Name" }
 		property VBusItem settingsPage: VBusItem { bind: pluginEntry.pluginRoot + "/SettingsPage" }
+		property VBusItem deviceListValues: VBusItem {
+			bind: pluginEntry.pluginRoot + "/DeviceListValues"
+		}
+		property variant valuePaths: deviceListValues.valid && deviceListValues.value !== ""
+			? String(deviceListValues.value).split("\n")
+			: []
 		property variant settingsComponent: settingsPage.valid && settingsPage.value !== ""
 			? Qt.createComponent(settingsPage.value)
 			: undefined
 
 		description: pluginName.valid ? pluginName.value : pluginId
-		item.bind: pluginRoot + "/Status"
+		item: VBusItem { value: [] }
 		subpage: settingsComponent !== undefined && settingsComponent.status === Component.Ready
 			? settingsComponent
 			: undefined
+
+		Repeater {
+			model: pluginEntry.valuePaths
+			MbTextBlock {
+				item.bind: modelData
+				width: 62
+				height: 25
+			}
+		}
 	}
 }

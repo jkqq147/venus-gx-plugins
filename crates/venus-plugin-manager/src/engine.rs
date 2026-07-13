@@ -53,6 +53,7 @@ pub struct PluginSnapshot {
     pub error: String,
     pub settings_page: String,
     pub dashboard_component: String,
+    pub device_list_values: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +107,7 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
             runtime,
             catalog_client,
             catalog: Catalog {
-                schema: plugin_manager_core::SCHEMA_VERSION,
+                schema: plugin_manager_core::CATALOG_SCHEMA_VERSION,
                 plugins: Vec::new(),
             },
             catalog_state: CatalogState::Empty,
@@ -321,6 +322,10 @@ impl<S: SettingsStore, R: PluginRuntime, T: HttpTransport> ManagerEngine<S, R, T
                     .zip(payload_root.as_ref())
                     .map(|(path, root)| root.join(path).to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                device_list_values: installed
+                    .and_then(|plugin| plugin.manifest.ui.device_list.as_ref())
+                    .map(|device_list| device_list.value_paths.clone())
+                    .unwrap_or_default(),
             });
         }
         Ok(ManagerSnapshot {
@@ -412,7 +417,7 @@ mod tests {
     use flate2::{write::GzEncoder, Compression};
     use plugin_manager_core::{
         CatalogEntry, PackageSource, PluginManifest, PluginSettings, PluginUi, Runtime,
-        SCHEMA_VERSION,
+        CATALOG_SCHEMA_VERSION, MANIFEST_SCHEMA_VERSION,
     };
     use sha2::{Digest, Sha256};
     use tempfile::TempDir;
@@ -554,7 +559,7 @@ mod tests {
 
     fn manifest() -> PluginManifest {
         PluginManifest {
-            schema: SCHEMA_VERSION,
+            schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
             version: "0.1.0".into(),
@@ -567,6 +572,7 @@ mod tests {
             ui: PluginUi {
                 settings_page: Some("qml/PageTpms.qml".into()),
                 dashboard_component: None,
+                device_list: None,
             },
         }
     }
@@ -627,7 +633,7 @@ mod tests {
         let manifest = manifest();
         let (package, sha256) = package(temp.path(), &manifest);
         let catalog = Catalog {
-            schema: SCHEMA_VERSION,
+            schema: CATALOG_SCHEMA_VERSION,
             plugins: vec![CatalogEntry {
                 id: "tpms".into(),
                 name: "TPMS".into(),

@@ -117,14 +117,14 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
-        PluginManifest, PluginRegistry, PluginSettings, PluginUi, Runtime, SCHEMA_VERSION,
+        PluginManifest, PluginRegistry, PluginSettings, PluginUi, Runtime, MANIFEST_SCHEMA_VERSION,
     };
 
     use super::*;
 
     fn native_manifest(version: &str) -> PluginManifest {
         PluginManifest {
-            schema: SCHEMA_VERSION,
+            schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
             version: version.into(),
@@ -137,6 +137,7 @@ mod tests {
             ui: PluginUi {
                 settings_page: Some("qml/PageTpmsSettings.qml".into()),
                 dashboard_component: Some("qml/OverviewTpms.qml".into()),
+                device_list: None,
             },
         }
     }

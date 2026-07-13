@@ -15,14 +15,14 @@ plugin.vplugin
 
 ## Manifest
 
-每个 manifest 使用 `schema: 1`，插件 ID 只能包含小写 ASCII 字母、数字和连字符。
+当前 Manager 兼容 manifest schema 1，并使用 schema 2 提供声明式 Device List 数据。插件 ID 只能包含小写 ASCII 字母、数字和连字符。
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "id": "tpms",
   "name": "TPMS",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-tpms-ble"
@@ -32,7 +32,15 @@ plugin.vplugin
   },
   "ui": {
     "settings_page": "qml/PageTpmsSettings.qml",
-    "dashboard_component": "qml/OverviewTpms.qml"
+    "dashboard_component": "qml/OverviewTpms.qml",
+    "device_list": {
+      "value_paths": [
+        "com.victronenergy.tpms.main/Slots/front_left/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/front_right/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/rear_left/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/rear_right/DeviceListValue"
+      ]
+    }
   }
 }
 ```
@@ -46,6 +54,7 @@ Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并
 
 - `settings_page`：Manager 为已启用插件在 Device List 生成直接入口，点击后加载该业务页面。
 - `dashboard_component`：Manager 将已启用插件的组件直接加入 Venus 主 Dashboard 轮播。
+- `device_list.value_paths`：可选的 1 至 4 个 Venus D-Bus 数据路径，Manager 按声明顺序显示在 Device List 行中；该字段要求 schema 2 且必须同时声明 `settings_page`。
 
 插件只提供组件，不修改 `PageMain.qml` 或 `main.qml`，也不自行创建菜单入口。关闭插件后，两类入口都会随服务一起隐藏；重新启用时由 Manager 恢复。
 
@@ -55,7 +64,7 @@ Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并
 import "/opt/victronenergy/gui/qml"
 ```
 
-Manifest 和 Catalog 按 schema 严格解析；未知字段会被拒绝，字段扩展必须通过新的 schema 版本明确演进。
+Manifest 和 Catalog 按各自 schema 严格解析；未知字段会被拒绝，字段扩展必须通过新的 schema 版本明确演进。Catalog 当前保持 schema 1，与 manifest schema 独立演进。
 
 ## 持久配置
 

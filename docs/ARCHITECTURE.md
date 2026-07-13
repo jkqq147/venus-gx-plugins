@@ -133,7 +133,7 @@ end note
 
 ## 运行时收敛
 
-Plugin Manager 通过 Venus D-Bus 发布目录、状态、管理命令和已启用插件的 UI 声明。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。Manager 在 `PageMain.qml` 中只保留一个通用 Device List 模型挂载点，在 `main.qml` 中只保留一个通用 Dashboard 控制器；插件的 Settings 页面和 Dashboard 组件均从不可变 Package Store 动态加载，不允许插件自行修改系统 QML。
+Plugin Manager 通过 Venus D-Bus 发布目录、状态、管理命令和已启用插件的 UI 声明。用户操作写入 `/Settings/Plugins/<plugin-id>/Enabled`，协调器每 5 秒结合 Registry 与 runit 实际状态进行幂等收敛。Manager 在 `PageMain.qml` 中只保留一个通用 Device List 模型挂载点，在 `main.qml` 中只保留一个通用 Dashboard 控制器；插件的 Settings 页面和 Dashboard 组件均从不可变 Package Store 动态加载，Device List 最多四个摘要值也只按 manifest 声明的 D-Bus 路径读取，不允许插件自行修改系统 QML。
 
 CCGX 只访问固定的 Cloudflare Pages 下载域名。GitHub Release 发布后，自动化会把目录和版本化文件同步为 Pages 静态资产；设备请求不再实时回源 GitHub。目录只接受 HTTPS，刷新时严格校验 schema、URL、SHA-256 格式和 Ed25519 签名；只有完整有效的目录才会原子替换本地缓存。安装包下载后还会重新校验大小、SHA-256、manifest 和归档内容，Cloudflare 不成为新的信任来源。
 

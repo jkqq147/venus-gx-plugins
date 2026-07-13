@@ -1,8 +1,8 @@
 {
-  "schema": 1,
+  "schema": 2,
   "id": "tpms",
   "name": "TPMS",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-tpms-ble"
@@ -12,6 +12,14 @@
   },
   "ui": {
     "settings_page": "qml/PageTpmsSettings.qml",
-    "dashboard_component": "qml/OverviewTpms.qml"
+    "dashboard_component": "qml/OverviewTpms.qml",
+    "device_list": {
+      "value_paths": [
+        "com.victronenergy.tpms.main/Slots/front_left/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/front_right/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/rear_left/DeviceListValue",
+        "com.victronenergy.tpms.main/Slots/rear_right/DeviceListValue"
+      ]
+    }
   }
 }

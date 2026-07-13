@@ -96,13 +96,13 @@ pub fn lifecycle_state(
 
 #[cfg(test)]
 mod tests {
-    use crate::{PluginSettings, PluginUi, SCHEMA_VERSION};
+    use crate::{PluginSettings, PluginUi, MANIFEST_SCHEMA_VERSION};
 
     use super::*;
 
     fn manifest(runtime: Runtime, ui: PluginUi) -> PluginManifest {
         PluginManifest {
-            schema: SCHEMA_VERSION,
+            schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
             version: "0.1.0".into(),
@@ -122,6 +122,7 @@ mod tests {
             PluginUi {
                 settings_page: Some("qml/PageTpmsSettings.qml".into()),
                 dashboard_component: None,
+                device_list: None,
             },
         )
     }
@@ -180,6 +181,7 @@ mod tests {
             PluginUi {
                 settings_page: Some("qml/Page.qml".into()),
                 dashboard_component: None,
+                device_list: None,
             },
         );
         let actions = plan_reconciliation(

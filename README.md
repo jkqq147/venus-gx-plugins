@@ -17,7 +17,7 @@ Plugin Manager 只安装管理平台，不会预装任何插件。
 通过 SSH 登录 CCGX，然后运行：
 
 ```sh
-curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.9/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
+curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.10/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
 chmod 0755 /tmp/venus-plugin-manager
 /tmp/venus-plugin-manager install-manager
 ```
@@ -28,7 +28,7 @@ chmod 0755 /tmp/venus-plugin-manager
 
 ### TPMS
 
-通过 CCGX 的蓝牙读取 BLE 胎压传感器，在主 Dashboard 显示胎压概览，并从 Device List 直接进入轮胎绑定、传感器扫描和诊断页面。
+通过 CCGX 的蓝牙读取 BLE 胎压传感器，在主 Dashboard 显示胎压概览，在 Device List 显示左前、右前、左后、右后四轮胎压，并可直接进入轮胎绑定、传感器扫描和诊断页面。
 
 ## 文档
 

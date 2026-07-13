@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const CATALOG_SCHEMA_VERSION: u32 = 1;
+pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
+const LEGACY_MANIFEST_SCHEMA_VERSION: u32 = 1;
+const MAX_DEVICE_LIST_VALUES: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +41,14 @@ pub struct PluginUi {
     pub settings_page: Option<String>,
     #[serde(default)]
     pub dashboard_component: Option<String>,
+    #[serde(default)]
+    pub device_list: Option<DeviceListUi>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceListUi {
+    pub value_paths: Vec<String>,
 }
 
 impl PluginUi {
@@ -95,6 +106,16 @@ pub enum ContractError {
     InvalidEnabledPath { expected: String, actual: String },
     #[error("invalid QML asset path: {0}")]
     InvalidQmlPath(String),
+    #[error("device_list requires manifest schema {MANIFEST_SCHEMA_VERSION}")]
+    DeviceListRequiresCurrentSchema,
+    #[error("device_list requires ui.settings_page")]
+    DeviceListWithoutSettingsPage,
+    #[error("device_list must declare between 1 and {MAX_DEVICE_LIST_VALUES} values, got {0}")]
+    InvalidDeviceListValueCount(usize),
+    #[error("invalid Device List D-Bus value path: {0}")]
+    InvalidDeviceListValuePath(String),
+    #[error("duplicate Device List D-Bus value path: {0}")]
+    DuplicateDeviceListValuePath(String),
     #[error("duplicate catalog plugin id: {0}")]
     DuplicateCatalogId(String),
     #[error("catalog package URL must use HTTPS: {0}")]
@@ -109,7 +130,7 @@ pub enum ContractError {
 
 impl PluginManifest {
     pub fn validate(&self) -> Result<(), ContractError> {
-        validate_schema(self.schema)?;
+        validate_manifest_schema(self.schema)?;
         validate_id(&self.id)?;
         if self.name.trim().is_empty() {
             return Err(ContractError::EmptyName);
@@ -141,13 +162,38 @@ impl PluginManifest {
             }
         }
 
+        if let Some(device_list) = &self.ui.device_list {
+            if self.schema != MANIFEST_SCHEMA_VERSION {
+                return Err(ContractError::DeviceListRequiresCurrentSchema);
+            }
+            if self.ui.settings_page.is_none() {
+                return Err(ContractError::DeviceListWithoutSettingsPage);
+            }
+            if device_list.value_paths.is_empty()
+                || device_list.value_paths.len() > MAX_DEVICE_LIST_VALUES
+            {
+                return Err(ContractError::InvalidDeviceListValueCount(
+                    device_list.value_paths.len(),
+                ));
+            }
+            let mut paths = HashSet::new();
+            for path in &device_list.value_paths {
+                if !is_safe_bus_item_path(path) {
+                    return Err(ContractError::InvalidDeviceListValuePath(path.clone()));
+                }
+                if !paths.insert(path) {
+                    return Err(ContractError::DuplicateDeviceListValuePath(path.clone()));
+                }
+            }
+        }
+
         Ok(())
     }
 }
 
 impl Catalog {
     pub fn validate(&self) -> Result<(), ContractError> {
-        validate_schema(self.schema)?;
+        validate_catalog_schema(self.schema)?;
         let mut ids = HashSet::new();
         for plugin in &self.plugins {
             validate_id(&plugin.id)?;
@@ -179,8 +225,16 @@ impl Catalog {
     }
 }
 
-fn validate_schema(schema: u32) -> Result<(), ContractError> {
-    if schema == SCHEMA_VERSION {
+fn validate_catalog_schema(schema: u32) -> Result<(), ContractError> {
+    if schema == CATALOG_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(ContractError::UnsupportedSchema(schema))
+    }
+}
+
+fn validate_manifest_schema(schema: u32) -> Result<(), ContractError> {
+    if schema == LEGACY_MANIFEST_SCHEMA_VERSION || schema == MANIFEST_SCHEMA_VERSION {
         Ok(())
     } else {
         Err(ContractError::UnsupportedSchema(schema))
@@ -227,6 +281,30 @@ fn is_safe_relative_path(path: &str, prefix: &str) -> bool {
             .any(|segment| segment == "." || segment == "..")
 }
 
+fn is_safe_bus_item_path(path: &str) -> bool {
+    let Some((service, item_path)) = path.split_once('/') else {
+        return false;
+    };
+    let service_valid = service.len() <= 255
+        && service.contains('.')
+        && service.split('.').all(|segment| {
+            !segment.is_empty()
+                && !segment.as_bytes()[0].is_ascii_digit()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        });
+    let item_path_valid = !item_path.is_empty()
+        && item_path.len() <= 255
+        && item_path.split('/').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        });
+    service_valid && item_path_valid
+}
+
 pub(crate) fn is_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
@@ -255,7 +333,7 @@ mod tests {
 
     fn manifest() -> PluginManifest {
         PluginManifest {
-            schema: SCHEMA_VERSION,
+            schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
             version: "0.1.0".into(),
@@ -268,6 +346,7 @@ mod tests {
             ui: PluginUi {
                 settings_page: Some("qml/PageTpmsSettings.qml".into()),
                 dashboard_component: Some("qml/OverviewTpms.qml".into()),
+                device_list: None,
             },
         }
     }
@@ -310,6 +389,84 @@ mod tests {
     }
 
     #[test]
+    fn accepts_four_declarative_device_list_values_in_schema_two() {
+        let mut manifest = manifest();
+        manifest.schema = MANIFEST_SCHEMA_VERSION;
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: ["front_left", "front_right", "rear_left", "rear_right"]
+                .map(|slot| format!("com.victronenergy.tpms.main/Slots/{slot}/DeviceListValue"))
+                .to_vec(),
+        });
+        assert_eq!(manifest.validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_device_list_values_in_schema_one() {
+        let mut manifest = manifest();
+        manifest.schema = LEGACY_MANIFEST_SCHEMA_VERSION;
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: vec![
+                "com.victronenergy.tpms.main/Slots/front_left/DeviceListValue".into(),
+            ],
+        });
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::DeviceListRequiresCurrentSchema)
+        );
+    }
+
+    #[test]
+    fn rejects_device_list_values_without_a_settings_page() {
+        let mut manifest = manifest();
+        manifest.ui.settings_page = None;
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: vec![
+                "com.victronenergy.tpms.main/Slots/front_left/DeviceListValue".into(),
+            ],
+        });
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::DeviceListWithoutSettingsPage)
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_or_oversized_device_list_values() {
+        let mut manifest = manifest();
+        manifest.schema = MANIFEST_SCHEMA_VERSION;
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: vec!["com.victronenergy.tpms.main/Slots/front-left/Value".into()],
+        });
+        assert!(matches!(
+            manifest.validate(),
+            Err(ContractError::InvalidDeviceListValuePath(_))
+        ));
+
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: (0..5)
+                .map(|index| format!("com.example.plugin/Values/Value{index}"))
+                .collect(),
+        });
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::InvalidDeviceListValueCount(5))
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_device_list_values() {
+        let mut manifest = manifest();
+        let path = "com.victronenergy.tpms.main/Slots/front_left/DeviceListValue";
+        manifest.ui.device_list = Some(DeviceListUi {
+            value_paths: vec![path.into(), path.into()],
+        });
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::DuplicateDeviceListValuePath(path.into()))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_manifest_fields() {
         let mut value = serde_json::to_value(manifest()).unwrap();
         value["install_script"] = serde_json::json!("bin/install.sh");
@@ -332,7 +489,7 @@ mod tests {
             },
         };
         let catalog = Catalog {
-            schema: SCHEMA_VERSION,
+            schema: CATALOG_SCHEMA_VERSION,
             plugins: vec![entry.clone(), entry],
         };
         assert_eq!(

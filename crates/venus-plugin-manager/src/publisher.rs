@@ -207,6 +207,7 @@ impl ManagerPublisher {
             "Error",
             "SettingsPage",
             "DashboardComponent",
+            "DeviceListValues",
         ] {
             self.add(&format!("{root}/{suffix}"), BusItem::string(""))?;
         }
@@ -282,6 +283,7 @@ impl ManagerPublisher {
 
     fn publish_plugin(&self, plugin: &PluginSnapshot) -> zbus::Result<()> {
         let root = plugin_root(plugin);
+        let device_list_values = plugin.device_list_values.join("\n");
         for (suffix, value) in [
             ("Id", plugin.id.as_str()),
             ("Name", plugin.name.as_str()),
@@ -293,6 +295,7 @@ impl ManagerPublisher {
             ("Error", plugin.error.as_str()),
             ("SettingsPage", plugin.settings_page.as_str()),
             ("DashboardComponent", plugin.dashboard_component.as_str()),
+            ("DeviceListValues", device_list_values.as_str()),
         ] {
             self.string(&format!("{root}/{suffix}"), value)?;
         }
@@ -432,6 +435,7 @@ mod tests {
             dashboard_component: format!(
                 "/data/venus-gx-plugins/state/plugins/{id}/payload/qml/Overview.qml"
             ),
+            device_list_values: vec![format!("com.example.{id}/DeviceList/Value")],
         }
     }
 

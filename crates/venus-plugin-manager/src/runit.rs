@@ -356,7 +356,7 @@ fn require_owned_directory(path: &Path) -> Result<(), RuntimeError> {
 mod tests {
     use std::sync::Mutex;
 
-    use plugin_manager_core::{PluginManifest, PluginSettings, PluginUi, SCHEMA_VERSION};
+    use plugin_manager_core::{PluginManifest, PluginSettings, PluginUi, MANIFEST_SCHEMA_VERSION};
     use tempfile::TempDir;
 
     use super::*;
@@ -384,7 +384,7 @@ mod tests {
     fn installed() -> InstalledPlugin {
         InstalledPlugin {
             manifest: PluginManifest {
-                schema: SCHEMA_VERSION,
+                schema: MANIFEST_SCHEMA_VERSION,
                 id: "tpms".into(),
                 name: "TPMS".into(),
                 version: "0.1.0".into(),

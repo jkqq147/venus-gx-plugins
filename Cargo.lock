@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "venus-plugin-manager"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "base64",
  "ed25519-dalek",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "venus-tpms-plugin"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "venus-tpms-ble",
 ]

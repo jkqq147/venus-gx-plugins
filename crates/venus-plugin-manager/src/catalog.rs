@@ -544,7 +544,7 @@ mod tests {
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use ed25519_dalek::{Signer, SigningKey};
-    use plugin_manager_core::{CatalogEntry, PackageSource, SCHEMA_VERSION};
+    use plugin_manager_core::{CatalogEntry, PackageSource, CATALOG_SCHEMA_VERSION};
     use tempfile::TempDir;
 
     use super::*;
@@ -594,7 +594,7 @@ mod tests {
             "tpms", "0.1.0", &sha256,
         ));
         Catalog {
-            schema: SCHEMA_VERSION,
+            schema: CATALOG_SCHEMA_VERSION,
             plugins: vec![CatalogEntry {
                 id: "tpms".into(),
                 name: "TPMS".into(),

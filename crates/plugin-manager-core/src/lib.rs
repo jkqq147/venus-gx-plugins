@@ -6,8 +6,9 @@ mod registry;
 mod transaction;
 
 pub use contract::{
-    Catalog, CatalogEntry, ContractError, PackageSignature, PackageSource, PluginManifest,
-    PluginSettings, PluginUi, Runtime, SCHEMA_VERSION,
+    Catalog, CatalogEntry, ContractError, DeviceListUi, PackageSignature, PackageSource,
+    PluginManifest, PluginSettings, PluginUi, Runtime, CATALOG_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
 };
 pub use error::CoreError;
 pub use lifecycle::{

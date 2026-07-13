@@ -135,14 +135,14 @@ fn relative_setting_path(manifest: &PluginManifest) -> String {
 
 #[cfg(test)]
 mod tests {
-    use plugin_manager_core::{PluginSettings, PluginUi, Runtime, SCHEMA_VERSION};
+    use plugin_manager_core::{PluginSettings, PluginUi, Runtime, MANIFEST_SCHEMA_VERSION};
 
     use super::*;
 
     #[test]
     fn derives_relative_path_from_valid_manifest() {
         let manifest = PluginManifest {
-            schema: SCHEMA_VERSION,
+            schema: MANIFEST_SCHEMA_VERSION,
             id: "tpms".into(),
             name: "TPMS".into(),
             version: "0.1.0".into(),
@@ -153,6 +153,7 @@ mod tests {
             ui: PluginUi {
                 settings_page: Some("qml/PageTpms.qml".into()),
                 dashboard_component: None,
+                device_list: None,
             },
         };
         assert_eq!(relative_setting_path(&manifest), "Plugins/tpms/Enabled");

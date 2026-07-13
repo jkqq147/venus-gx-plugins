@@ -7,7 +7,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use plugin_manager_core::{PackageSource, SCHEMA_VERSION};
+use plugin_manager_core::PackageSource;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -18,6 +18,7 @@ use crate::{
 };
 
 const MANAGER_ARTIFACT_ID: &str = "plugin-manager";
+const RELEASE_SCHEMA_VERSION: u32 = 1;
 const MAX_RELEASE_BYTES: u64 = 64 * 1024;
 const MAX_BINARY_BYTES: u64 = 16 * 1024 * 1024;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -250,7 +251,7 @@ fn parse_release(
 ) -> Result<ManagerRelease, UpdateError> {
     let release: ManagerRelease = serde_json::from_slice(contents)
         .map_err(|error| UpdateError::InvalidRelease(error.to_string()))?;
-    if release.schema != SCHEMA_VERSION {
+    if release.schema != RELEASE_SCHEMA_VERSION {
         return Err(UpdateError::InvalidRelease(format!(
             "unsupported schema version {}",
             release.schema
@@ -448,7 +449,7 @@ mod tests {
             &sha256,
         ));
         ManagerRelease {
-            schema: SCHEMA_VERSION,
+            schema: RELEASE_SCHEMA_VERSION,
             version: version.into(),
             binary: PackageSource {
                 url: BINARY_URL.into(),

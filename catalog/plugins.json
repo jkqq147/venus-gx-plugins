@@ -4,13 +4,13 @@
     {
       "id": "tpms",
       "name": "TPMS",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.0/tpms-0.1.0.vplugin",
-        "sha256": "4bdbe29e5c6bccea520f62f20be66371020a7fc15eff666734a04faa6fa003eb",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.10/tpms-0.1.1.vplugin",
+        "sha256": "24541adefef77776836eedff2d21ff8271f8e228f34d6f05101308b2d152ea51",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "am0GS1tiOWJV3KLC9ZrpECQ6n51uf9vW+D2alkFVllcUAqdEVfzqj019epFZccc4lgEro6HI4Sj4SmeuCHLUDQ=="
+          "ed25519": "VsZkEqG2QVidybnerwnKQXdm63fUc/Qg9OEc4Gf8BEr3HWIDquGXenEvyGsb0tjHZXqYReBbSE9FLNDDs2HYCQ=="
         }
       }
     }
