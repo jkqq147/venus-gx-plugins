@@ -36,7 +36,7 @@ MbPage {
 		}
 
 		MbItemText {
-			text: error.value
+			text: error.valid ? String(error.value) : ""
 			wrapMode: Text.WordWrap
 			show: error.valid && error.value !== ""
 		}

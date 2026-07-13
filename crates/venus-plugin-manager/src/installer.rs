@@ -64,6 +64,10 @@ const QML_FILES: &[(&str, &str)] = &[
         "PagePluginDashboards.qml",
         include_str!("../../../ui/qml/PagePluginDashboards.qml"),
     ),
+    (
+        "PagePluginDashboardHost.qml",
+        include_str!("../../../ui/qml/PagePluginDashboardHost.qml"),
+    ),
 ];
 
 #[derive(Debug, Error)]

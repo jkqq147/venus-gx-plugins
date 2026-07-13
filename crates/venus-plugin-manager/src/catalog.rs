@@ -59,6 +59,7 @@ impl HttpTransport for SystemHttpTransport {
         require_https(url)?;
         let mut child = Command::new("curl")
             .args([
+                "--ipv4",
                 "--proto",
                 "=https",
                 "--proto-redir",
@@ -67,8 +68,15 @@ impl HttpTransport for SystemHttpTransport {
                 "--silent",
                 "--show-error",
                 "--location",
+                "--retry",
+                "3",
+                "--retry-delay",
+                "0",
+                "--retry-max-time",
+                "45",
+                "--retry-connrefused",
                 "--connect-timeout",
-                "20",
+                "8",
                 "--max-time",
                 "120",
             ])

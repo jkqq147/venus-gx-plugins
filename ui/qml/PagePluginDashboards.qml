@@ -9,6 +9,11 @@ MbPage {
 	property string pageLoadError: ""
 	title: qsTr("Plugin dashboards")
 
+	Component {
+		id: dashboardHostComponent
+		PagePluginDashboardHost {}
+	}
+
 	function openDashboard(path) {
 		pageLoadError = ""
 		var component = Qt.createComponent(path)
@@ -16,12 +21,15 @@ MbPage {
 			pageLoadError = component.errorString()
 			return
 		}
-		var page = component.createObject(root)
+		var page = pageStack.push(dashboardHostComponent, {
+			"dashboardComponent": component,
+			"width": root.width,
+			"height": root.height
+		})
 		if (page === null) {
 			pageLoadError = qsTr("Unable to open dashboard")
 			return
 		}
-		pageStack.push(page)
 	}
 
 	model: VisualModels {
