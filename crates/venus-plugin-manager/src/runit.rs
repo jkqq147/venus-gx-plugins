@@ -277,12 +277,15 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
         if fs::symlink_metadata(&link).is_err() {
             return Ok(ServiceState::Failed);
         }
-        let Ok(status) = self.controller.status(&link) else {
-            return Ok(ServiceState::Failed);
-        };
-        if status.starts_with("up ") || status.contains(": up ") {
-            Ok(ServiceState::Running)
-        } else if status.starts_with("down ") || status.contains(": down ") {
+        if let Ok(status) = self.controller.status(&link) {
+            if status.starts_with("up ") || status.contains(": up ") {
+                return Ok(ServiceState::Running);
+            }
+            if status.starts_with("down ") || status.contains(": down ") {
+                return Ok(ServiceState::Stopped);
+            }
+        }
+        if self.definition(&plugin.manifest.id).join("down").is_file() {
             Ok(ServiceState::Stopped)
         } else {
             Ok(ServiceState::Failed)
@@ -475,6 +478,23 @@ mod tests {
             fs::read_link(temp.path().join("service/venus-plugin-tpms")).unwrap(),
             definition
         );
+    }
+
+    #[test]
+    fn disabled_service_is_stopped_before_supervisor_reports_status() {
+        let temp = TempDir::new().unwrap();
+        let runtime = RunitRuntime::with_controller(
+            temp.path().join("state"),
+            temp.path().join("config"),
+            temp.path().join("definitions"),
+            temp.path().join("service"),
+            FakeController::default(),
+        );
+        let plugin = installed();
+
+        runtime.sync_definition(&plugin).unwrap();
+
+        assert_eq!(runtime.observe(&plugin).unwrap(), ServiceState::Stopped);
     }
 
     #[test]
