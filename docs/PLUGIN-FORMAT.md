@@ -69,8 +69,6 @@ Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并
 import "/opt/victronenergy/gui/qml"
 ```
 
-当前阶段以中文作为插件平台的唯一必需界面语言。Manifest 的名称、简介以及插件 QML 的用户可见文案都应直接提供中文；插件名称是 `TPMS`、`Rathole` 等专有名称时保持原名。现阶段不要求插件维护英文，也不在各页面预埋语言判断。未来需要双语时，通过独立 PR 统一扩展格式和翻译机制。
-
 Manifest 和 Catalog 按各自 schema 严格解析；未知字段会被拒绝，字段扩展必须通过新的 schema 版本明确演进。Catalog schema 2 提供插件描述，与 manifest schema 独立演进。
 
 ## 持久配置

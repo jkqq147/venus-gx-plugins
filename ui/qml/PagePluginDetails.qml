@@ -34,7 +34,7 @@ MbPage {
 		}
 		var page = component.createObject(root)
 		if (page === null) {
-			pageLoadError = "无法打开插件页面"
+			pageLoadError = qsTr("Unable to open plugin page")
 			return
 		}
 		pageStack.push(page)
@@ -48,24 +48,24 @@ MbPage {
 		}
 
 		MbItemValue {
-			description: "版本"
+			description: qsTr("Version")
 			item.bind: root.pluginRoot + "/InstalledVersion"
 			show: installed.value === 1
 		}
 
 		MbItemValue {
-			description: "版本"
+			description: qsTr("Version")
 			item.bind: root.pluginRoot + "/CatalogVersion"
 			show: installed.value !== 1 && available.value === 1
 		}
 
 		MbOK {
-			description: installed.value === 1 ? "更新" : "安装"
+			description: installed.value === 1 ? qsTr("Update") : qsTr("Install")
 			value: busy.value === 1
-				? "处理中..."
+				? qsTr("Working...")
 				: installed.value === 1
-					? "版本 " + String(root.catalogVersion.value)
-					: "点击安装"
+					? qsTr("Version ") + String(root.catalogVersion.value)
+					: qsTr("Press to install")
 			show: available.value === 1 && (installed.value !== 1 || hasUpdate.value === 1)
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
@@ -73,15 +73,15 @@ MbPage {
 		}
 
 		MbSwitch {
-			name: "启用"
+			name: qsTr("Enabled")
 			bind: root.pluginRoot + "/Enabled"
 			show: installed.value === 1
 			enabled: busy.value !== 1
 		}
 
 		MbOK {
-			description: "插件设置"
-			value: "打开"
+			description: qsTr("Open plugin")
+			value: qsTr("Open")
 			show: installed.value === 1 && root.enabledItem.value === 1 && root.hasSettingsPage.value === 1
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
@@ -89,8 +89,8 @@ MbPage {
 		}
 
 		MbOK {
-			description: "卸载"
-			value: "点击选择"
+			description: qsTr("Uninstall")
+			value: qsTr("Press to choose")
 			show: installed.value === 1
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
@@ -99,13 +99,13 @@ MbPage {
 
 		MbItemOptions {
 			id: uninstallConfirmation
-			description: "确认卸载"
-			message: "请选择是否保留插件配置。"
+			description: qsTr("Confirm uninstall")
+			message: qsTr("Choose whether to keep this plugin's configuration.")
 			show: false
 			possibleValues: [
-				MbOption { description: "取消"; value: 0 },
-				MbOption { description: "卸载并保留配置"; value: 1 },
-				MbOption { description: "彻底删除"; value: 2 }
+				MbOption { description: qsTr("Cancel"); value: 0 },
+				MbOption { description: qsTr("Uninstall, keep configuration"); value: 1 },
+				MbOption { description: qsTr("Delete plugin and configuration"); value: 2 }
 			]
 			onOptionSelected: {
 				if (newValue === 1)
@@ -117,12 +117,12 @@ MbPage {
 
 		MbItemOptions {
 			id: purgeConfirmation
-			description: "确认彻底删除"
-			message: "删除插件及其全部配置？此操作无法撤销。"
+			description: qsTr("Confirm permanent deletion")
+			message: qsTr("Delete this plugin and all of its configuration? This cannot be undone.")
 			show: false
 			possibleValues: [
-				MbOption { description: "取消"; value: 0 },
-				MbOption { description: "永久删除"; value: 1 }
+				MbOption { description: qsTr("Cancel"); value: 0 },
+				MbOption { description: qsTr("Delete permanently"); value: 1 }
 			]
 			onOptionSelected: {
 				if (newValue === 1)
@@ -138,7 +138,7 @@ MbPage {
 
 		MbItemText {
 			property VBusItem pluginError: VBusItem { bind: root.pluginRoot + "/Error" }
-			text: pluginError.valid ? String(pluginError.value) : ""
+			text: pluginError.value
 			wrapMode: Text.WordWrap
 			show: pluginError.valid && pluginError.value !== ""
 		}
