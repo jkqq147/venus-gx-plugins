@@ -32,7 +32,7 @@ const RC_END: &str = "# END venus-plugin-manager";
 const SETTINGS_BLOCK: &str = r#"
 		// BEGIN venus-plugin-manager-settings
 		MbSubMenu {
-			description: qsTr("Plugins")
+			description: "插件"
 			subpage: Component { PagePlugins {} }
 		}
 		// END venus-plugin-manager-settings

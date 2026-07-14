@@ -3,7 +3,7 @@ import com.victron.velib 1.0
 
 MbPage {
 	id: root
-	title: qsTr("Plugins")
+	title: "插件"
 	property string service: "com.victronenergy.pluginmanager"
 	property VBusItem busy: VBusItem { bind: root.service + "/Busy" }
 	property VBusItem error: VBusItem { bind: root.service + "/LastError" }
@@ -15,32 +15,36 @@ MbPage {
 
 	model: VisibleItemModel {
 		MbSubMenu {
-			description: qsTr("Installed plugins")
+			description: "已安装插件"
 			item.bind: root.service + "/InstalledCount"
 			subpage: Component { PagePluginList { mode: "installed" } }
 		}
 
 		MbSubMenu {
-			description: qsTr("Get plugins")
+			description: "获取插件"
 			item.bind: root.service + "/AvailableCount"
 			subpage: Component { PagePluginList { mode: "available" } }
 		}
 
 		MbOK {
-			description: qsTr("Check for updates")
+			description: "检查更新"
 			value: busy.value === 1
-				? qsTr("Checking...")
+				? "检查中..."
 				: catalogLoaded.value === 1
-					? qsTr("Checked")
-					: qsTr("Press to check")
+					? "已检查"
+					: "点击检查"
 			editable: busy.value !== 1
 			enabled: busy.value !== 1
 			onClicked: refresh.setValue(1)
 		}
 
 		MbOK {
-			description: qsTr("Update Plugin Manager")
-			value: busy.value === 1 ? qsTr("Updating...") : managerAvailableVersion.value
+			description: "更新插件管理器"
+			value: busy.value === 1
+				? "更新中..."
+				: managerAvailableVersion.valid
+					? String(managerAvailableVersion.value)
+					: ""
 			show: managerHasUpdate.value === 1
 			editable: busy.value !== 1
 			enabled: busy.value !== 1

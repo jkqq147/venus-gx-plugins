@@ -9,14 +9,14 @@ MbPage {
 		bind: root.service + (root.mode === "installed" ? "/InstalledIds" : "/AvailableIds")
 	}
 	property variant pluginIds: ids.valid && ids.value !== "" ? String(ids.value).split(",") : []
-	title: mode === "installed" ? qsTr("Installed plugins") : qsTr("Get plugins")
+	title: mode === "installed" ? "已安装插件" : "获取插件"
 
 	model: VisualModels {
 		VisibleItemModel {
 			MbItemText {
 				text: root.mode === "installed"
-					? qsTr("No plugins installed")
-					: qsTr("No plugin information. Go back and check for updates.")
+					? "尚未安装插件"
+					: "暂无插件信息，请返回检查更新。"
 				wrapMode: Text.WordWrap
 				show: root.pluginIds.length === 0
 			}
@@ -37,12 +37,12 @@ MbPage {
 				property string summary: root.mode === "available"
 					? (pluginDescription.valid ? String(pluginDescription.value) : "")
 					: hasUpdate.value === 1
-						? qsTr("Update available")
+						? "有可用更新"
 						: lifecycle.value === "enabled"
-							? qsTr("On")
+							? "已开启"
 							: lifecycle.value === "degraded"
-								? qsTr("Needs attention")
-								: qsTr("Off")
+								? "需要处理"
+								: "已关闭"
 
 				description: pluginName.valid ? pluginName.value : pluginId
 				item: VBusItem { value: pluginEntry.summary }
