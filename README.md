@@ -29,7 +29,7 @@ chmod 0755 /tmp/venus-plugin-manager
 | 插件 | 用途 |
 | --- | --- |
 | [TPMS](plugins/tpms/README.md) | 蓝牙胎压监测 |
-| [Rathole](plugins/rathole/README.md) | GX 设备安全远程访问 |
+| [Rathole](plugins/rathole/README.md) | 将 GX 内网服务映射到公网 |
 
 ## 许可证
 
