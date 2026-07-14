@@ -3,7 +3,7 @@
   "id": "rathole",
   "name": "Rathole",
   "description": "通过安全隧道远程访问 GX 设备，配置由用户通过 SSH 管理。",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/rathole",
@@ -13,6 +13,11 @@
     "enabled_path": "/Settings/Plugins/rathole/Enabled"
   },
   "ui": {
-    "settings_page": "qml/PageRatholeSettings.qml"
+    "settings_page": "qml/PageRatholeSettings.qml",
+    "device_list": {
+      "value_paths": [
+        "com.victronenergy.pluginmanager/Plugins/rathole/ServiceState"
+      ]
+    }
   }
 }
