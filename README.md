@@ -26,13 +26,10 @@ chmod 0755 /tmp/venus-plugin-manager
 
 ## 当前插件
 
-### TPMS
-
-通过 CCGX 的蓝牙读取 BLE 胎压传感器，在主 Dashboard 显示胎压概览，在 Device List 显示左前、右前、左后、右后四轮胎压，并可直接进入轮胎绑定、传感器扫描和诊断页面。
-
-### Rathole
-
-通过安全隧道远程访问 GX 设备。安装后先通过 SSH 使用 `nano /data/venus-gx-plugins/config/rathole/client.toml` 配置，再在 Plugin Manager 中启用；界面只负责启停和状态，不保存连接日志。
+| 插件 | 用途 |
+| --- | --- |
+| [TPMS](plugins/tpms/README.md) | 蓝牙胎压监测 |
+| [Rathole](plugins/rathole/README.md) | GX 设备安全远程访问 |
 
 ## 文档
 
