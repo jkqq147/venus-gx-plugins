@@ -14,7 +14,30 @@ Plugin Manager 只安装管理平台，不会预装任何插件。
 
 ## 安装
 
-通过 SSH 登录 CCGX，然后运行：
+### 1. 开启 CCGX 的 SSH
+
+在 CCGX 上进入 `Settings > General`：
+
+1. 将 `Access level` 设为 `User and installer`，密码为 `ZZZ`。
+2. 返回 `General` 页面并选中 `Access level`，不要进入该选项；长按面板右键，直到它变为 `Superuser`。
+3. 打开 `Set root password`，设置一个至少 6 位的强 root 密码。
+4. 启用 `SSH on LAN`。
+
+完整步骤见 [Victron 官方 Root Access 文档](https://www.victronenergy.com/live/ccgx:root_access)。
+
+### 2. 登录 CCGX
+
+确保电脑与 CCGX 位于同一局域网。在 CCGX 的网络设置中查看 IP 地址，然后从电脑终端登录，例如：
+
+```sh
+ssh root@192.168.1.23
+```
+
+将示例 IP 替换为你的 CCGX 地址，首次连接时确认设备指纹并输入刚设置的 root 密码。
+
+### 3. 安装 Plugin Manager
+
+登录成功后运行：
 
 ```sh
 curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.13/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
