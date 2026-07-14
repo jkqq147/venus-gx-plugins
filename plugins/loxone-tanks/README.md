@@ -2,6 +2,8 @@
 
 将 Loxone Miniserver 中的清水、灰水和黑水液位接入 Venus OS，并显示在 GX 原生水箱页面。
 
+![Loxone 水箱在 GX 原生水箱页面中的显示效果](images/gx-tank-view.png)
+
 ## Loxone 准备
 
 在 Loxone 中提供三个只读数值 Sensor，名称分别为：
