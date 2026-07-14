@@ -29,6 +29,9 @@ const OVERVIEWS_END: &str = "// END venus-plugin-manager-overviews";
 const RC_BEGIN: &str = "# BEGIN venus-plugin-manager";
 const RC_END: &str = "# END venus-plugin-manager";
 
+const NOTIFICATIONS_ENTRY: &str = "\t\t\tMbSubMenu {\n\t\t\t\tid: menuNotifications\n\t\t\t\tdescription: qsTr(\"Notifications\")\n\t\t\t\titem: VBusItem { value: menuNotifications.subpage.summary }\n\t\t\t\tsubpage: PageNotifications { }\n\t\t\t}";
+const SETTINGS_ENTRY: &str = "\t\t\tMbSubMenu {\n\t\t\t\tdescription: qsTr(\"Settings\")\n\t\t\t\tsubpage: Component { PageSettings {} }\n\t\t\t}";
+
 const SETTINGS_BLOCK: &str = r#"
 		// BEGIN venus-plugin-manager-settings
 		MbSubMenu {
@@ -217,6 +220,7 @@ fn install_inner(config: &InstallConfig) -> Result<(), InstallerError> {
             SETTINGS_BLOCK,
         )?;
         remove_block_if_present(&main_page, LEGACY_DASHBOARD_BEGIN, LEGACY_DASHBOARD_END)?;
+        order_device_footer_for_v355(&main_page)?;
         patch_file(
             &main_page,
             DEVICE_ENTRIES_BEGIN,
@@ -342,6 +346,35 @@ fn remove_block_if_present(path: &Path, begin: &str, end: &str) -> Result<(), In
         return Ok(());
     }
     let patched = replace_block(path, &contents, begin, end, "")?;
+    write_atomic(path, patched.as_bytes(), 0o644)
+}
+
+fn order_device_footer_for_v355(path: &Path) -> Result<(), InstallerError> {
+    let contents = fs::read_to_string(path).map_err(|source| io_error(path, source))?;
+    let notifications = contents
+        .find(NOTIFICATIONS_ENTRY)
+        .ok_or_else(|| InstallerError::MissingAnchor(path.to_path_buf()))?;
+    let settings = contents
+        .find(SETTINGS_ENTRY)
+        .ok_or_else(|| InstallerError::MissingAnchor(path.to_path_buf()))?;
+
+    // Preserve the native v3.55 footer order after migrating legacy plugin rows.
+    // Plugin Manager inserts its own model before this footer and does not own
+    // either of these system menu entries.
+    if notifications < settings {
+        return Ok(());
+    }
+
+    let settings_end = settings + SETTINGS_ENTRY.len();
+    let notifications_end = notifications + NOTIFICATIONS_ENTRY.len();
+    let patched = format!(
+        "{}{}{}{}{}",
+        &contents[..settings],
+        NOTIFICATIONS_ENTRY,
+        &contents[settings_end..notifications],
+        SETTINGS_ENTRY,
+        &contents[notifications_end..]
+    );
     write_atomic(path, patched.as_bytes(), 0o644)
 }
 
@@ -565,6 +598,17 @@ fn create_dir_all(path: &Path) -> Result<(), InstallerError> {
 }
 
 fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<(), InstallerError> {
+    if let Ok(existing) = fs::read(path) {
+        let existing_mode = fs::metadata(path)
+            .map_err(|source| io_error(path, source))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if existing == contents && existing_mode == mode {
+            return Ok(());
+        }
+    }
+
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     create_dir_all(parent)?;
     let temp = parent.join(format!(
@@ -641,6 +685,8 @@ impl FileBackup {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -704,6 +750,42 @@ mod tests {
         assert_eq!(contents.matches(DEVICE_ENTRIES_END).count(), 1);
         assert!(contents.contains("PluginDeviceEntriesModel {}"));
         assert!(contents.contains("// unrelated entry"));
+    }
+
+    #[test]
+    fn keeps_settings_visually_last_in_the_v355_device_list() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("PageMain.qml");
+        fs::write(
+            &path,
+            format!(
+                "MbPage {{\n\tmodel: VisibleItemModel {{\n{SETTINGS_ENTRY}\n\n{NOTIFICATIONS_ENTRY}\n\t}}\n}}\n"
+            ),
+        )
+        .unwrap();
+
+        order_device_footer_for_v355(&path).unwrap();
+        order_device_footer_for_v355(&path).unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(contents.find(NOTIFICATIONS_ENTRY) < contents.find(SETTINGS_ENTRY));
+        assert_eq!(contents.matches("id: menuNotifications").count(), 1);
+        assert_eq!(
+            contents.matches("description: qsTr(\"Settings\")").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn identical_atomic_write_keeps_the_existing_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("unchanged");
+        fs::write(&path, b"same").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let inode = fs::metadata(&path).unwrap().ino();
+
+        write_atomic(&path, b"same", 0o644).unwrap();
+
+        assert_eq!(fs::metadata(path).unwrap().ino(), inode);
     }
 
     #[test]

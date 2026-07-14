@@ -9,6 +9,10 @@ Item {
 
 	property VBusItem guiReady: VBusItem {
 		bind: "com.victronenergy.pluginmanager/Gui/Ready"
+		onValidChanged: {
+			if (valid)
+				setValue(1)
+		}
 	}
 	property VBusItem dashboardSources: VBusItem {
 		bind: "com.victronenergy.pluginmanager/DashboardSources"

@@ -104,8 +104,12 @@ impl ManagerPublisher {
             }),
         )?;
 
-        publisher.connection.request_name(SERVICE_NAME)?;
         Ok(publisher)
+    }
+
+    pub fn register(&self) -> zbus::Result<()> {
+        self.connection.request_name(SERVICE_NAME)?;
+        Ok(())
     }
 
     pub fn publish(
@@ -368,7 +372,12 @@ fn plugin_key_from_item_path(path: &str) -> Option<&str> {
 fn device_entry_ids(plugins: &[PluginSnapshot]) -> String {
     plugins
         .iter()
-        .filter(|plugin| plugin.installed && plugin.enabled && !plugin.settings_page.is_empty())
+        .filter(|plugin| {
+            plugin.installed
+                && plugin.enabled
+                && !plugin.settings_page.is_empty()
+                && !plugin.device_list_values.is_empty()
+        })
         .map(|plugin| plugin.id.as_str())
         .collect::<Vec<_>>()
         .join(",")
@@ -484,11 +493,12 @@ mod tests {
     fn omits_missing_ui_components_independently() {
         let mut settings_only = plugin("settings-only", true);
         settings_only.dashboard_component.clear();
+        settings_only.device_list_values.clear();
         let mut dashboard_only = plugin("dashboard-only", true);
         dashboard_only.settings_page.clear();
         let plugins = vec![settings_only, dashboard_only];
 
-        assert_eq!(device_entry_ids(&plugins), "settings-only");
+        assert_eq!(device_entry_ids(&plugins), "");
         assert_eq!(
             dashboard_sources(&plugins),
             "/data/venus-gx-plugins/state/plugins/dashboard-only/payload/qml/Overview.qml"

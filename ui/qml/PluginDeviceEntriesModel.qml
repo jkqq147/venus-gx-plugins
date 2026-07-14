@@ -25,7 +25,9 @@ VisualDataModel {
 			? Qt.createComponent(settingsPage.value)
 			: undefined
 
-		description: pluginName.valid ? pluginName.value : pluginId
+		description: pluginName.valid && pluginName.value !== ""
+			? String(pluginName.value)
+			: pluginId
 		item: VBusItem { value: [] }
 		subpage: settingsComponent !== undefined && settingsComponent.status === Component.Ready
 			? settingsComponent

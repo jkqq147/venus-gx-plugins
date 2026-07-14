@@ -55,6 +55,7 @@ chmod 0755 /tmp/venus-plugin-manager
 | --- | --- |
 | [TPMS](plugins/tpms/README.md) | 蓝牙胎压监测 |
 | [Rathole](plugins/rathole/README.md) | 将 GX 内网服务映射到公网 |
+| [Loxone Tanks](plugins/loxone-tanks/README.md) | 将 Loxone 水箱液位接入 GX 原生水箱页面 |
 
 ## 许可证
 

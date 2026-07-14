@@ -187,7 +187,8 @@ impl PluginManifest {
             return Err(ContractError::MissingQmlUi);
         }
 
-        let expected_enabled_path = format!("/Settings/Plugins/{}/Enabled", self.id);
+        let expected_enabled_path =
+            format!("/Settings/Plugins/{}/Enabled", self.id.replace('-', "_"));
         if self.settings.enabled_path != expected_enabled_path {
             return Err(ContractError::InvalidEnabledPath {
                 expected: expected_enabled_path,
@@ -416,6 +417,23 @@ mod tests {
     #[test]
     fn accepts_a_native_plugin_manifest() {
         assert_eq!(manifest().validate(), Ok(()));
+    }
+
+    #[test]
+    fn hyphenated_plugin_ids_use_a_valid_dbus_settings_segment() {
+        let mut manifest = manifest();
+        manifest.id = "loxone-tanks".into();
+        manifest.settings.enabled_path = "/Settings/Plugins/loxone_tanks/Enabled".into();
+        assert_eq!(manifest.validate(), Ok(()));
+
+        manifest.settings.enabled_path = "/Settings/Plugins/loxone-tanks/Enabled".into();
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::InvalidEnabledPath {
+                expected: "/Settings/Plugins/loxone_tanks/Enabled".into(),
+                actual: "/Settings/Plugins/loxone-tanks/Enabled".into(),
+            })
+        );
     }
 
     #[test]

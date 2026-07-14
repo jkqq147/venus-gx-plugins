@@ -15,8 +15,9 @@ jobs:
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/tpms/manifest.json
       - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/rathole/manifest.json
+      - run: cargo run --locked --bin venus-plugin-manager -- validate-manifest plugins/loxone-tanks/manifest.json
       - run: cargo run --locked --bin venus-plugin-manager -- validate-catalog catalog/plugins.json
       - run: cargo run --locked --bin venus-plugin-manager -- validate-manager-release manager/release.json
-      - run: sh -n scripts/build-armv7.sh scripts/package-tpms.sh scripts/package-rathole.sh
+      - run: sh -n scripts/build-armv7.sh scripts/package-tpms.sh scripts/package-rathole.sh scripts/package-loxone-tanks.sh
       - run: ./scripts/package-rathole.sh
       - run: bash -n scripts/build-pages-dist.sh

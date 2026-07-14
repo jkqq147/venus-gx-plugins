@@ -86,6 +86,10 @@ pub fn run(config: ServiceConfig) -> Result<(), ServiceError> {
     let (command_sender, command_receiver) = mpsc::channel();
     let mut publisher = ManagerPublisher::new(connection, command_sender)?;
     publisher.publish(&snapshot, &updater.snapshot(), false, &last_error)?;
+    // Publish the complete initial snapshot before exposing the service name.
+    // The Venus GUI fetches GetItems as soon as a D-Bus owner appears; registering
+    // earlier creates a race where it can retain the zero/empty defaults.
+    publisher.register()?;
 
     while let Ok(command) = command_receiver.recv() {
         execute_command(&mut engine, &mut updater, &mut publisher, command)?;

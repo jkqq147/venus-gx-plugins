@@ -67,11 +67,12 @@ impl SettingsStore for VenusSettings {
             return Ok(enabled);
         }
         let relative = relative_setting_path(manifest);
+        let name = add_setting_name(&relative)?;
         let status: i32 = self.settings_proxy()?.call(
             "AddSetting",
             &(
                 "Plugins",
-                format!("{}/Enabled", manifest.id),
+                name,
                 OwnedValue::from(0_i32),
                 "i",
                 OwnedValue::from(0_i32),
@@ -136,6 +137,14 @@ fn relative_setting_path(manifest: &PluginManifest) -> String {
         .to_owned()
 }
 
+fn add_setting_name(relative: &str) -> Result<&str, SettingsError> {
+    relative
+        .strip_prefix("Plugins/")
+        .ok_or_else(|| SettingsError::InvalidValue {
+            path: relative.to_owned(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use plugin_manager_core::{PluginSettings, PluginUi, Runtime, MANIFEST_SCHEMA_VERSION};
@@ -161,5 +170,38 @@ mod tests {
             },
         };
         assert_eq!(relative_setting_path(&manifest), "Plugins/tpms/Enabled");
+    }
+
+    #[test]
+    fn hyphenated_ids_keep_the_dbus_safe_manifest_path() {
+        let mut manifest = PluginManifest {
+            schema: MANIFEST_SCHEMA_VERSION,
+            id: "loxone-tanks".into(),
+            name: "Loxone Tanks".into(),
+            description: "Read Loxone tank sensors".into(),
+            version: "0.1.0".into(),
+            runtime: Runtime::QmlOnly,
+            settings: PluginSettings {
+                enabled_path: "/Settings/Plugins/loxone_tanks/Enabled".into(),
+            },
+            ui: PluginUi {
+                settings_page: Some("qml/PageLoxoneTanks.qml".into()),
+                dashboard_component: None,
+                device_list: None,
+            },
+        };
+        assert_eq!(
+            relative_setting_path(&manifest),
+            "Plugins/loxone_tanks/Enabled"
+        );
+        assert_eq!(
+            add_setting_name(&relative_setting_path(&manifest)).unwrap(),
+            "loxone_tanks/Enabled"
+        );
+
+        manifest.settings.enabled_path = "/Settings/Other/Enabled".into();
+        let relative = relative_setting_path(&manifest);
+        assert_eq!(relative, "Other/Enabled");
+        assert!(add_setting_name(&relative).is_err());
     }
 }

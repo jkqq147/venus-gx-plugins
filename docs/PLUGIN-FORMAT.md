@@ -55,13 +55,13 @@ plugin.vplugin
 
 Schema 4 的 `native-service` 可以声明最多 16 个 `arguments`。Manager 不通过 shell 拼接或展开这些值，而是逐项原样传给可执行文件；服务工作目录固定为该插件的持久配置目录。因此 Rathole 可以直接声明 `--client client.toml`，无需包装脚本或第二个管理进程。
 
-Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并真实存在。Enabled 路径必须严格等于 `/Settings/Plugins/<plugin-id>/Enabled`。
+Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并真实存在。Enabled 路径使用 `/Settings/Plugins/<settings-id>/Enabled`；`settings-id` 等于插件 ID，但其中的连字符必须转换为下划线，以满足 D-Bus 对象路径规则。例如 `loxone-tanks` 使用 `/Settings/Plugins/loxone_tanks/Enabled`。
 
-- `settings_page`：Manager 为已启用插件在 Device List 生成直接入口，点击后加载该业务页面。
+- `settings_page`：Manager 在插件详情页提供业务设置入口；单独声明它不会向 Device List 增加重复设备行。
 - `dashboard_component`：Manager 将已启用插件的组件直接加入 Venus 主 Dashboard 轮播。
-- `device_list.value_paths`：可选的 1 至 4 个 Venus D-Bus 数据路径，Manager 按声明顺序显示在 Device List 行中；该字段要求 schema 2 且必须同时声明 `settings_page`。
+- `device_list.value_paths`：可选的 1 至 4 个 Venus D-Bus 数据路径；声明后 Manager 才会为插件生成 Device List 行，并按顺序显示这些值。该字段要求 schema 2 且必须同时声明 `settings_page`。
 
-插件只提供组件，不修改 `PageMain.qml` 或 `main.qml`，也不自行创建菜单入口。关闭插件后，两类入口都会随服务一起隐藏；重新启用时由 Manager 恢复。
+插件只提供组件，不修改 `PageMain.qml` 或 `main.qml`，也不自行创建菜单入口。关闭插件后，其业务入口会随服务一起隐藏；重新启用时由 Manager 恢复。
 
 插件 QML 从独立的 Package Store 加载。使用 `MbPage`、`OverviewPage` 等 Venus GUI 类型的文件必须显式导入宿主目录：
 
