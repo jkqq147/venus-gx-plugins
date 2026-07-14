@@ -6,6 +6,8 @@
 
 Plugin Manager 只安装管理平台，不会预装任何插件。
 
+<img src="docs/images/plugin-manager.png" width="640" alt="CCGX 上的 Plugin Manager">
+
 ## 支持设备
 
 - CCGX
