@@ -31,10 +31,6 @@ chmod 0755 /tmp/venus-plugin-manager
 | [TPMS](plugins/tpms/README.md) | 蓝牙胎压监测 |
 | [Rathole](plugins/rathole/README.md) | GX 设备安全远程访问 |
 
-## 文档
-
-[项目架构](docs/ARCHITECTURE.md) · [插件包格式](docs/PLUGIN-FORMAT.md)
-
 ## 许可证
 
 MIT
