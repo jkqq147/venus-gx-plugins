@@ -2,7 +2,7 @@
 
 将 Loxone Miniserver 中的清水、灰水和黑水液位接入 Venus OS，并显示在 GX 原生水箱页面。
 
-![Loxone 水箱在 GX 原生水箱页面中的显示效果](images/gx-tank-view.png)
+<img src="images/gx-tank-view.png" width="480" alt="Loxone 水箱在 GX 原生水箱页面中的显示效果">
 
 ## Loxone 准备
 
