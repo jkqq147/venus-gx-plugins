@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             env::set_var("VENUS_TPMS_STATE_PATH", state_path);
         }
     }
-    tpms_core::run_service()
+    venus_tpms_plugin::run_service()
 }
 
 #[cfg(not(target_os = "linux"))]

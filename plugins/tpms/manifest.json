@@ -3,7 +3,7 @@
   "id": "tpms",
   "name": "TPMS",
   "description": "通过蓝牙读取轮胎压力和温度，并显示在 GX Dashboard。",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-tpms-ble"
