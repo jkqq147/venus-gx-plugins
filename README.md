@@ -42,7 +42,7 @@ ssh root@192.168.1.23
 登录成功后运行：
 
 ```sh
-curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.13/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
+curl -fL https://venus-gx-plugins.pages.dev/releases/download/v0.1.14/venus-plugin-manager-armv7.bin -o /tmp/venus-plugin-manager
 chmod 0755 /tmp/venus-plugin-manager
 /tmp/venus-plugin-manager install-manager
 ```

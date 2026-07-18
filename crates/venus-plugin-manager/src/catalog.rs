@@ -279,12 +279,22 @@ fn read_http_line(
     let count = reader
         .read_until(b'\n', &mut line)
         .map_err(|error| http_error(url, error.to_string()))?;
-    *used += count;
-    if count == 0 || *used > MAX_HTTP_HEADER_BYTES || !line.ends_with(b"\n") {
+    if count == 0 {
         return Err(http_error(
             url,
-            "invalid or oversized HTTP response headers",
+            if *used == 0 {
+                "HTTPS connection closed before an HTTP response was received"
+            } else {
+                "HTTP response headers ended early"
+            },
         ));
+    }
+    *used += count;
+    if *used > MAX_HTTP_HEADER_BYTES {
+        return Err(http_error(url, "HTTP response headers are too large"));
+    }
+    if !line.ends_with(b"\n") {
+        return Err(http_error(url, "HTTP response header line ended early"));
     }
     line.pop();
     if line.ends_with(b"\r") {
@@ -723,6 +733,21 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn distribution_response_reports_an_early_connection_close() {
+        let error = read_distribution_response(
+            &mut b"".as_slice(),
+            &mut Vec::new(),
+            "https://venus-gx-plugins.pages.dev/package.vplugin",
+            16,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("HTTPS connection closed before an HTTP response was received"));
     }
 
     #[test]

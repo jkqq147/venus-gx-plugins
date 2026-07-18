@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "venus-plugin-manager"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "base64",
  "ed25519-dalek",

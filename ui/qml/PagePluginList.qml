@@ -31,18 +31,17 @@ MbPage {
 				property string pluginKey: pluginId.replace(/-/g, "_")
 				property string pluginRoot: root.service + "/Plugins/" + pluginKey
 				property VBusItem pluginName: VBusItem { bind: pluginEntry.pluginRoot + "/Name" }
-				property VBusItem pluginDescription: VBusItem { bind: pluginEntry.pluginRoot + "/Description" }
 				property VBusItem lifecycle: VBusItem { bind: pluginEntry.pluginRoot + "/Lifecycle" }
 				property VBusItem hasUpdate: VBusItem { bind: pluginEntry.pluginRoot + "/HasUpdate" }
-				property string summary: root.mode === "available"
-					? (pluginDescription.valid ? String(pluginDescription.value) : "")
-					: hasUpdate.value === 1
+				property string summary: root.mode === "installed"
+					? hasUpdate.value === 1
 						? qsTr("Update available")
 						: lifecycle.value === "enabled"
 							? qsTr("On")
 							: lifecycle.value === "degraded"
 								? qsTr("Needs attention")
 								: qsTr("Off")
+					: ""
 
 				description: pluginName.valid ? pluginName.value : pluginId
 				item: VBusItem { value: pluginEntry.summary }
