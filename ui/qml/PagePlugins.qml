@@ -52,5 +52,10 @@ MbPage {
 			wrapMode: Text.WordWrap
 			show: error.valid && error.value !== ""
 		}
+
+		MbItemValue {
+			description: qsTr("Version")
+			item.bind: root.service + "/Manager/InstalledVersion"
+		}
 	}
 }

@@ -827,6 +827,15 @@ mod tests {
     }
 
     #[test]
+    fn plugins_page_shows_the_installed_manager_version_last() {
+        let page = include_str!("../../../ui/qml/PagePlugins.qml");
+        let update = page.find("Update Plugin Manager").unwrap();
+        let version = page.find("/Manager/InstalledVersion").unwrap();
+
+        assert!(version > update);
+    }
+
+    #[test]
     fn rejects_an_incomplete_marker_block() {
         let error = replace_block(Path::new("x"), "begin only", "begin", "end", "new").unwrap_err();
         assert!(matches!(error, InstallerError::BrokenMarker(_)));
