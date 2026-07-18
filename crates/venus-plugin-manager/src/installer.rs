@@ -818,6 +818,15 @@ mod tests {
     }
 
     #[test]
+    fn plugin_list_keeps_catalog_descriptions_in_the_details_page() {
+        let list = include_str!("../../../ui/qml/PagePluginList.qml");
+        let details = include_str!("../../../ui/qml/PagePluginDetails.qml");
+
+        assert!(!list.contains("/Description"));
+        assert!(details.contains("/Description"));
+    }
+
+    #[test]
     fn rejects_an_incomplete_marker_block() {
         let error = replace_block(Path::new("x"), "begin only", "begin", "end", "new").unwrap_err();
         assert!(matches!(error, InstallerError::BrokenMarker(_)));
