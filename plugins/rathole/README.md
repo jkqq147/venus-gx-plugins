@@ -1,54 +1,33 @@
 # Rathole
 
-Rathole 是一个内网穿透工具，可以将 GX 设备上的 SSH、Web 等内网服务安全地映射到公网，方便在外部网络访问。
+Rathole 可以把 GX 设备或同一局域网内的服务安全地映射到公网，例如 Home Assistant、Loxone、摄像机和 SSH。
 
-## 开始前
+## 使用前准备
 
-你需要先准备一台可以从公网访问的 Rathole 服务端，并取得以下信息：
-
-- 服务端地址和控制端口，例如 `tunnel.example.com:2333`
-- 服务名称，例如 `gx-ssh`
-- 与服务端一致的 Token
-- 服务端分配的公网访问端口
-
-Rathole 插件只负责 GX 上的客户端，不提供公共服务器。
+你需要先准备一台公网 Rathole 服务端，并向管理员确认控制端口。公网访问端口由管理员在服务端分配，不需要填写到 GX。
 
 ## 配置
 
-通过 SSH 以 `root` 用户登录 GX，然后打开配置文件：
+进入 `Settings > Plugins > Rathole`，填写：
+
+- 服务端地址和控制端口
+- 当前 GX 的设备名称，例如 `sn1350`
+- 需要转发的内网服务
+
+插件会生成一个当前设备共用的 Token，并直接显示在页面中。将页面生成的服务名称和 Token 发给服务端管理员即可。
+
+服务名称会自动组合为 `<名称前缀>_<设备名称>`。例如设备名称为 `sn1350`，添加 Loxone 后会生成 `loxone_sn1350`。
+
+配置只会在点击“保存并应用”时写入一次。保存后 Rathole 会重新连接，不会在后台扫描局域网、周期改写配置或持续写日志到闪存。
+
+## 从旧配置升级
+
+插件会读取已有的 `client.toml`，并识别使用同一 Token、名称符合上述规则的 TCP 服务。读取和升级插件本身都不会改写配置。
+
+如果配置包含 TLS、Noise、代理、混合 Token 或其他 GUI 无法无损保留的高级选项，页面会自动进入只读模式，现有隧道仍按原文件运行。此时继续通过 SSH 编辑：
 
 ```sh
 nano /data/venus-gx-plugins/config/rathole/client.toml
 ```
 
-以公开 GX 的 SSH 服务为例，输入：
-
-```toml
-[client]
-remote_addr = "tunnel.example.com:2333"
-
-[client.services.gx-ssh]
-token = "替换为你的Token"
-local_addr = "127.0.0.1:22"
-```
-
-其中：
-
-| 配置 | 含义 |
-| --- | --- |
-| `remote_addr` | Rathole 服务端地址和控制端口 |
-| `gx-ssh` | 服务名称，必须与服务端配置一致 |
-| `token` | 访问凭证，必须与服务端配置一致 |
-| `local_addr` | 要公开的 GX 内网服务；`127.0.0.1:22` 表示 SSH |
-
-公网访问端口配置在 Rathole 服务端，不需要写入 GX 的 `client.toml`。
-
-在 nano 中按 `Ctrl+O`、回车保存，再按 `Ctrl+X` 退出。
-
-## 启用
-
-进入 `Settings > Plugins > Rathole`，启用插件。修改配置后，需要先关闭再重新启用 Rathole 才会载入新配置。
-
-界面显示“运行中”表示客户端进程已经启动；是否能够从公网访问，仍需通过服务端分配的公网端口实际验证。GX 界面不会显示 Token，也不会保存连接日志。
-
-公开服务前，请先为 SSH 或 Web 管理页面设置可靠的访问保护；SSH 建议使用密钥登录。
+公开 SSH 或 Web 管理页面前，请先为服务本身配置可靠的访问保护；SSH 建议使用密钥登录。

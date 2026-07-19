@@ -69,7 +69,7 @@ pub fn build_vplugin(source: &Path, destination: &Path) -> Result<BuiltPackage, 
         let mut input = File::open(&path).map_err(|source_error| io_error(&path, source_error))?;
         let mut header = tar::Header::new_gnu();
         header.set_size(metadata.len());
-        header.set_mode(if executable_path(&manifest) == Some(relative.as_path()) {
+        header.set_mode(if executable_path(&manifest, &relative) {
             0o755
         } else {
             0o644
@@ -144,8 +144,16 @@ fn validate_source_path(path: &Path) -> Result<(), BuildError> {
 }
 
 fn require_manifest_files(root: &Path, manifest: &PluginManifest) -> Result<(), BuildError> {
-    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
+    if let Runtime::NativeService {
+        executable,
+        companion_executables,
+        ..
+    } = &manifest.runtime
+    {
         require_file(root, executable)?;
+        for path in companion_executables {
+            require_file(root, path)?;
+        }
     }
     for path in [&manifest.ui.settings_page, &manifest.ui.dashboard_component]
         .into_iter()
@@ -172,10 +180,19 @@ fn require_file(root: &Path, relative: &str) -> Result<(), BuildError> {
     }
 }
 
-fn executable_path(manifest: &PluginManifest) -> Option<&Path> {
+fn executable_path(manifest: &PluginManifest, relative: &Path) -> bool {
     match &manifest.runtime {
-        Runtime::NativeService { executable, .. } => Some(Path::new(executable)),
-        Runtime::QmlOnly => None,
+        Runtime::NativeService {
+            executable,
+            companion_executables,
+            ..
+        } => {
+            Path::new(executable) == relative
+                || companion_executables
+                    .iter()
+                    .any(|path| Path::new(path) == relative)
+        }
+        Runtime::QmlOnly => false,
     }
 }
 

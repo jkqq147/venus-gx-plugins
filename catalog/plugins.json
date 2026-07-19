@@ -18,14 +18,14 @@
     {
       "id": "rathole",
       "name": "Rathole",
-      "description": "通过安全隧道远程访问 GX 设备，配置由用户通过 SSH 管理。",
-      "version": "0.1.2",
+      "description": "通过安全隧道远程访问 GX 设备和同一局域网内的服务。",
+      "version": "0.2.0",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/rathole-v0.1.2/rathole-0.1.2.vplugin",
-        "sha256": "d8c593011d512da87f112a2c58015d20359fda03cb2451cb0d53b1bedd64f51f",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/rathole-v0.2.0/rathole-0.2.0.vplugin",
+        "sha256": "b8581e662fdcdd3b1814a0399d43a93f8a1a96cd7f68a764afb668f910d3a9b9",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "E9QV1S7KYKDAP4cNXVM9xJsaZF0kQdSvyoJmKrvPyHCDo0NHeIPnfzNBva1DFsn31UCCVnyYBkH5M/QmRvcOCA=="
+          "ed25519": "mlwLfTL2uDhXkkQmvl4qy+bK7gTrcjBUDDZofwhhr8VEOvrYSspIri81AArvXjKkPUD1Mj1F9akQ14SEC4B3Cw=="
         }
       }
     },

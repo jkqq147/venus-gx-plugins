@@ -4,16 +4,18 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const CATALOG_SCHEMA_VERSION: u32 = 2;
-pub const MANIFEST_SCHEMA_VERSION: u32 = 4;
+pub const MANIFEST_SCHEMA_VERSION: u32 = 5;
 const LEGACY_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DEVICE_LIST_MANIFEST_SCHEMA_VERSION: u32 = 2;
 const DESCRIPTION_MANIFEST_SCHEMA_VERSION: u32 = 3;
 const ARGUMENTS_MANIFEST_SCHEMA_VERSION: u32 = 4;
+const COMPANION_EXECUTABLES_MANIFEST_SCHEMA_VERSION: u32 = 5;
 const LEGACY_CATALOG_SCHEMA_VERSION: u32 = 1;
 const MAX_DEVICE_LIST_VALUES: usize = 4;
 const MAX_DESCRIPTION_CHARS: usize = 160;
 const MAX_RUNTIME_ARGUMENTS: usize = 16;
 const MAX_RUNTIME_ARGUMENT_CHARS: usize = 256;
+const MAX_COMPANION_EXECUTABLES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +39,8 @@ pub enum Runtime {
         executable: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         arguments: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        companion_executables: Vec<String>,
     },
     QmlOnly,
 }
@@ -123,6 +127,18 @@ pub enum ContractError {
     TooManyRuntimeArguments,
     #[error("invalid native runtime argument")]
     InvalidRuntimeArgument,
+    #[error(
+        "companion executables require manifest schema {COMPANION_EXECUTABLES_MANIFEST_SCHEMA_VERSION} or newer"
+    )]
+    CompanionExecutablesRequireCurrentSchema,
+    #[error(
+        "native runtime must declare at most {MAX_COMPANION_EXECUTABLES} companion executables"
+    )]
+    TooManyCompanionExecutables,
+    #[error("invalid companion executable: {0}")]
+    InvalidCompanionExecutable(String),
+    #[error("duplicate native executable path: {0}")]
+    DuplicateExecutable(String),
     #[error("qml-only plugin must declare at least one QML component")]
     MissingQmlUi,
     #[error("enabled setting must be {expected}, got {actual}")]
@@ -166,6 +182,7 @@ impl PluginManifest {
         if let Runtime::NativeService {
             executable,
             arguments,
+            companion_executables,
         } = &self.runtime
         {
             if !is_safe_relative_path(executable, "bin/") {
@@ -182,6 +199,23 @@ impl PluginManifest {
                     || argument.chars().any(char::is_control)
             }) {
                 return Err(ContractError::InvalidRuntimeArgument);
+            }
+            if self.schema < COMPANION_EXECUTABLES_MANIFEST_SCHEMA_VERSION
+                && !companion_executables.is_empty()
+            {
+                return Err(ContractError::CompanionExecutablesRequireCurrentSchema);
+            }
+            if companion_executables.len() > MAX_COMPANION_EXECUTABLES {
+                return Err(ContractError::TooManyCompanionExecutables);
+            }
+            let mut executables = HashSet::from([executable.as_str()]);
+            for path in companion_executables {
+                if !is_safe_relative_path(path, "bin/") {
+                    return Err(ContractError::InvalidCompanionExecutable(path.clone()));
+                }
+                if !executables.insert(path) {
+                    return Err(ContractError::DuplicateExecutable(path.clone()));
+                }
             }
         } else if self.ui.is_empty() {
             return Err(ContractError::MissingQmlUi);
@@ -402,6 +436,7 @@ mod tests {
             runtime: Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
                 arguments: Vec::new(),
+                companion_executables: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -460,6 +495,7 @@ mod tests {
         manifest.runtime = Runtime::NativeService {
             executable: "bin/../service".into(),
             arguments: Vec::new(),
+            companion_executables: Vec::new(),
         };
         assert_eq!(
             manifest.validate(),
@@ -481,6 +517,7 @@ mod tests {
         manifest.runtime = Runtime::NativeService {
             executable: "bin/rathole".into(),
             arguments: vec!["--client".into(), "client.toml".into()],
+            companion_executables: Vec::new(),
         };
         assert_eq!(manifest.validate(), Ok(()));
 
@@ -497,6 +534,25 @@ mod tests {
         assert_eq!(
             manifest.validate(),
             Err(ContractError::InvalidRuntimeArgument)
+        );
+    }
+
+    #[test]
+    fn companion_executables_are_explicit_and_schema_gated() {
+        let mut manifest = manifest();
+        if let Runtime::NativeService {
+            companion_executables,
+            ..
+        } = &mut manifest.runtime
+        {
+            companion_executables.push("bin/rathole".into());
+        }
+        assert_eq!(manifest.validate(), Ok(()));
+
+        manifest.schema = ARGUMENTS_MANIFEST_SCHEMA_VERSION;
+        assert_eq!(
+            manifest.validate(),
+            Err(ContractError::CompanionExecutablesRequireCurrentSchema)
         );
     }
 

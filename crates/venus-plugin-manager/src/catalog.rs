@@ -601,6 +601,7 @@ mod tests {
             runtime: Runtime::NativeService {
                 executable: "bin/tpms".into(),
                 arguments: Vec::new(),
+                companion_executables: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),

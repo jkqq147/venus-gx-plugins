@@ -1,13 +1,13 @@
 {
-  "schema": 4,
+  "schema": 5,
   "id": "rathole",
   "name": "Rathole",
-  "description": "通过安全隧道远程访问 GX 设备，配置由用户通过 SSH 管理。",
-  "version": "0.1.2",
+  "description": "通过安全隧道远程访问 GX 设备和同一局域网内的服务。",
+  "version": "0.2.0",
   "runtime": {
     "kind": "native-service",
-    "executable": "bin/rathole",
-    "arguments": ["--client", "client.toml"]
+    "executable": "bin/venus-rathole",
+    "companion_executables": ["bin/rathole"]
   },
   "settings": {
     "enabled_path": "/Settings/Plugins/rathole/Enabled"
@@ -16,7 +16,7 @@
     "settings_page": "qml/PageRatholeSettings.qml",
     "device_list": {
       "value_paths": [
-        "com.victronenergy.pluginmanager/Plugins/rathole/ServiceState"
+        "com.victronenergy.rathole/Status/State"
       ]
     }
   }

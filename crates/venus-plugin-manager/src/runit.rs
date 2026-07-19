@@ -202,6 +202,7 @@ impl<C: RunitController> PluginRuntime for RunitRuntime<C> {
         let Runtime::NativeService {
             executable,
             arguments,
+            ..
         } = &plugin.manifest.runtime
         else {
             return self.remove_definition(plugin);
@@ -434,6 +435,7 @@ mod tests {
                 runtime: Runtime::NativeService {
                     executable: "bin/tpms".into(),
                     arguments: Vec::new(),
+                    companion_executables: Vec::new(),
                 },
                 settings: PluginSettings {
                     enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -511,6 +513,7 @@ mod tests {
         plugin.manifest.runtime = Runtime::NativeService {
             executable: "bin/rathole".into(),
             arguments: vec!["--client".into(), "client.toml".into(), "$HOME".into()],
+            companion_executables: Vec::new(),
         };
 
         runtime.sync_definition(&plugin).unwrap();

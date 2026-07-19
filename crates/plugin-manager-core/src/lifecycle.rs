@@ -120,6 +120,7 @@ mod tests {
             Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
                 arguments: Vec::new(),
+                companion_executables: Vec::new(),
             },
             PluginUi {
                 settings_page: Some("qml/PageTpmsSettings.qml".into()),
@@ -203,6 +204,7 @@ mod tests {
             Runtime::NativeService {
                 executable: "bin/service".into(),
                 arguments: Vec::new(),
+                companion_executables: Vec::new(),
             },
             PluginUi::default(),
         );

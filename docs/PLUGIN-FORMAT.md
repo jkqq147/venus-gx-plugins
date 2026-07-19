@@ -17,7 +17,7 @@ plugin.vplugin
 
 ## Manifest
 
-当前 Manager 兼容 manifest schema 1 至 4：schema 2 增加声明式 Device List，schema 3 增加插件描述，schema 4 增加原生服务参数。插件 ID 只能包含小写 ASCII 字母、数字和连字符。
+当前 Manager 兼容 manifest schema 1 至 5：schema 2 增加声明式 Device List，schema 3 增加插件描述，schema 4 增加原生服务参数，schema 5 增加显式伴随可执行文件。插件 ID 只能包含小写 ASCII 字母、数字和连字符。
 
 ```json
 {
@@ -53,7 +53,9 @@ plugin.vplugin
 - `native-service`：必须提供 manifest 中 `bin/` 下声明的自包含可执行文件。
 - `qml-only`：不包含持久后台服务，并且必须声明至少一个 QML 组件。
 
-Schema 4 的 `native-service` 可以声明最多 16 个 `arguments`。Manager 不通过 shell 拼接或展开这些值，而是逐项原样传给可执行文件；服务工作目录固定为该插件的持久配置目录。因此 Rathole 可以直接声明 `--client client.toml`，无需包装脚本或第二个管理进程。
+Schema 4 的 `native-service` 可以声明最多 16 个 `arguments`。Manager 不通过 shell 拼接或展开这些值，而是逐项原样传给可执行文件；服务工作目录固定为该插件的持久配置目录。
+
+Schema 5 可以通过 `companion_executables` 显式声明最多 8 个由主进程调用的同包二进制。Manager 不会单独启动它们，但会像主可执行文件一样验证路径、要求文件真实存在并设置为 `0755`。未声明的普通文件仍保持不可执行。Rathole 使用这一能力将插件适配器与经过校验的上游隧道程序放在同一不可变包中。
 
 Manifest 引用的 Settings 页面和 Dashboard 组件必须位于 `qml/` 下并真实存在。Enabled 路径使用 `/Settings/Plugins/<settings-id>/Enabled`；`settings-id` 等于插件 ID，但其中的连字符必须转换为下划线，以满足 D-Bus 对象路径规则。例如 `loxone-tanks` 使用 `/Settings/Plugins/loxone_tanks/Enabled`。
 

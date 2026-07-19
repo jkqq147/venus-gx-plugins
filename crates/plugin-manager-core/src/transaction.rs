@@ -132,6 +132,7 @@ mod tests {
             runtime: Runtime::NativeService {
                 executable: "bin/venus-tpms-ble".into(),
                 arguments: Vec::new(),
+                companion_executables: Vec::new(),
             },
             settings: PluginSettings {
                 enabled_path: "/Settings/Plugins/tpms/Enabled".into(),
@@ -168,6 +169,15 @@ mod tests {
         );
         if include_runtime {
             append_file(&mut builder, "bin/venus-tpms-ble", b"test binary");
+            if let Runtime::NativeService {
+                companion_executables,
+                ..
+            } = &manifest.runtime
+            {
+                for path in companion_executables {
+                    append_file(&mut builder, path, b"test companion");
+                }
+            }
         }
         append_file(&mut builder, "qml/PageTpmsSettings.qml", b"Item {}");
         append_file(&mut builder, "qml/OverviewTpms.qml", b"Item {}");
@@ -253,6 +263,38 @@ mod tests {
                 .join("bin/venus-tpms-ble");
             assert_eq!(
                 fs::metadata(executable).unwrap().permissions().mode() & 0o777,
+                0o755
+            );
+        }
+    }
+
+    #[test]
+    fn installs_only_declared_companion_executables_as_executable() {
+        let temp = TempDir::new().unwrap();
+        let mut manifest = native_manifest("0.1.0");
+        if let Runtime::NativeService {
+            companion_executables,
+            ..
+        } = &mut manifest.runtime
+        {
+            companion_executables.push("bin/rathole".into());
+        }
+        let (package, sha256) = write_package(temp.path(), &manifest, true);
+        let manager = LocalRegistry::new(temp.path().join("state"));
+        manager
+            .install_vplugin(&package, &expectation(&manifest, &sha256))
+            .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let installed = &manager.load().unwrap().plugins["tpms"];
+            let companion = manager
+                .root()
+                .join(&installed.install_path)
+                .join("bin/rathole");
+            assert_eq!(
+                fs::metadata(companion).unwrap().permissions().mode() & 0o777,
                 0o755
             );
         }

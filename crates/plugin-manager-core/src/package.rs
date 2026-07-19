@@ -245,8 +245,16 @@ fn validate_archive_path(path: &Path, is_directory: bool) -> Result<(), CoreErro
 
 pub(crate) fn validate_payload(root: &Path, manifest: &PluginManifest) -> Result<(), CoreError> {
     require_regular_file(&root.join("manifest.json"))?;
-    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
+    if let Runtime::NativeService {
+        executable,
+        companion_executables,
+        ..
+    } = &manifest.runtime
+    {
         require_regular_file(&root.join(executable))?;
+        for path in companion_executables {
+            require_regular_file(&root.join(path))?;
+        }
     }
     for relative_path in [&manifest.ui.settings_page, &manifest.ui.dashboard_component]
         .into_iter()
@@ -300,10 +308,17 @@ fn normalize_permissions(root: &Path, manifest: &PluginManifest) -> Result<(), C
     fs::set_permissions(root, fs::Permissions::from_mode(0o755))
         .map_err(|error| io_error(root.to_path_buf(), error))?;
     visit(root)?;
-    if let Runtime::NativeService { executable, .. } = &manifest.runtime {
-        let path = root.join(executable);
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-            .map_err(|error| io_error(path, error))?;
+    if let Runtime::NativeService {
+        executable,
+        companion_executables,
+        ..
+    } = &manifest.runtime
+    {
+        for relative in std::iter::once(executable).chain(companion_executables) {
+            let path = root.join(relative);
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .map_err(|error| io_error(path, error))?;
+        }
     }
     Ok(())
 }
