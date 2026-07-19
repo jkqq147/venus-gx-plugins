@@ -19,7 +19,6 @@ MbPage {
 	property VBusItem serviceCount: VBusItem { bind: root.serviceRoot + "/Services/Count" }
 	property VBusItem saveCommand: VBusItem { bind: root.serviceRoot + "/Config/Save" }
 	property VBusItem confirmRenameCommand: VBusItem { bind: root.serviceRoot + "/Config/ConfirmRename" }
-	property VBusItem tokenCommand: VBusItem { bind: root.serviceRoot + "/Config/GenerateToken" }
 	property bool isEditable: configMode.value === "managed" || configMode.value === "missing"
 
 	function text(zh, en) {
@@ -115,13 +114,6 @@ MbPage {
 			show: root.isEditable
 		}
 
-		MbOK {
-			description: root.text("重新生成 Token", "Regenerate token")
-			value: root.text("按下选择", "Press to choose")
-			show: root.isEditable
-			onClicked: tokenConfirmation.edit()
-		}
-
 		MbSubMenu {
 			description: root.text("转发服务", "Forwarded services")
 			show: root.isEditable
@@ -135,18 +127,6 @@ MbPage {
 			value: root.text("按下确认", "Press to confirm")
 			show: root.isEditable && root.dirty.value === 1
 			onClicked: root.requestSave()
-		}
-
-		MbItemOptions {
-			id: tokenConfirmation
-			description: root.text("确认更换 Token", "Confirm token change")
-			message: root.text("更换后，服务端也必须使用新的 Token。", "The server must also be updated to use the new token.")
-			show: false
-			possibleValues: [
-				MbOption { description: root.text("取消", "Cancel"); value: 0 },
-				MbOption { description: root.text("生成新 Token", "Generate new token"); value: 1 }
-			]
-			onOptionSelected: if (newValue === 1) root.tokenCommand.setValue(1)
 		}
 
 		MbItemOptions {

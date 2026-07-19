@@ -1,6 +1,6 @@
 [package]
 name = "venus-rathole-plugin"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 license.workspace = true
 description = "Venus OS configuration adapter for the bundled Rathole client"

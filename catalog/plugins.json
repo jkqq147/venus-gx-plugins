@@ -19,13 +19,13 @@
       "id": "rathole",
       "name": "Rathole",
       "description": "通过安全隧道远程访问 GX 设备和同一局域网内的服务。",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/rathole-v0.2.0/rathole-0.2.0.vplugin",
-        "sha256": "b8581e662fdcdd3b1814a0399d43a93f8a1a96cd7f68a764afb668f910d3a9b9",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/rathole-v0.2.1/rathole-0.2.1.vplugin",
+        "sha256": "f57ca715d2eb917718ad5902ba7bc1a01df9ea0cfda8fcedbd8c6e884febc42a",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "mlwLfTL2uDhXkkQmvl4qy+bK7gTrcjBUDDZofwhhr8VEOvrYSspIri81AArvXjKkPUD1Mj1F9akQ14SEC4B3Cw=="
+          "ed25519": "VCZB9RQftg/6StIDPLVB9V3l6sjqUPp1s26ytBUGRbl/5sqbeKeeBPjZ+7TkAGOZZDezvePqKCcEKgEVF2PSAg=="
         }
       }
     },

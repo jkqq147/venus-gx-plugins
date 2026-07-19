@@ -14,7 +14,6 @@ pub enum Command {
     SetServerHost(String),
     SetServerPort(String),
     SetDeviceName(String),
-    GenerateToken,
     Save,
     ConfirmRename,
     SetServiceSlug(usize, String),
@@ -93,12 +92,6 @@ impl Publisher {
             BusItem::writable_string("", move |value| {
                 sender.send(Command::SetDeviceName(value)).map_or(2, |_| 0)
             }),
-        )?;
-        add_command(
-            &mut publisher,
-            "/Config/GenerateToken",
-            commands.clone(),
-            Command::GenerateToken,
         )?;
         add_command(
             &mut publisher,
@@ -280,7 +273,6 @@ impl Publisher {
 
     pub fn reset_commands(&self) -> zbus::Result<()> {
         for path in [
-            "/Config/GenerateToken",
             "/Config/Save",
             "/Config/ConfirmRename",
             "/Services/Add/Commit",

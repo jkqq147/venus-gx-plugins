@@ -3,7 +3,7 @@ use std::{env, io, path::PathBuf, sync::mpsc};
 use zbus::blocking::Connection;
 
 use crate::{
-    config::{generate_token, LoadMode, ManagedConfig, ServiceConfig, MAX_SERVICES},
+    config::{LoadMode, ManagedConfig, ServiceConfig, MAX_SERVICES},
     process::RatholeProcess,
     publisher::{Command, Publisher},
 };
@@ -115,13 +115,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Command::SetDeviceName(value) => {
                 if let Some(config) = draft.as_mut() {
                     config.device_name = value;
-                    changed(&publisher, &mut dirty)?;
-                    publisher.publish_config(config)?;
-                }
-            }
-            Command::GenerateToken => {
-                if let Some(config) = draft.as_mut() {
-                    config.token = generate_token();
                     changed(&publisher, &mut dirty)?;
                     publisher.publish_config(config)?;
                 }

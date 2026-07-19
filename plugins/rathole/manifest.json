@@ -3,7 +3,7 @@
   "id": "rathole",
   "name": "Rathole",
   "description": "通过安全隧道远程访问 GX 设备和同一局域网内的服务。",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-rathole",
