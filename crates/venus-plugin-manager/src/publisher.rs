@@ -74,22 +74,12 @@ impl ManagerPublisher {
         let sender = publisher.commands.clone();
         publisher.add(
             "/Refresh",
-            BusItem::writable_i32(0, move |value| {
-                if value != 1 {
-                    return 2;
-                }
-                sender.send(ManagerCommand::Refresh).map_or(2, |_| 0)
-            }),
+            BusItem::trigger(move || sender.send(ManagerCommand::Refresh).map_or(2, |_| 0)),
         )?;
         let sender = publisher.commands.clone();
         publisher.add(
             "/Manager/Update",
-            BusItem::writable_i32(0, move |value| {
-                if value != 1 {
-                    return 2;
-                }
-                sender.send(ManagerCommand::UpdateManager).map_or(2, |_| 0)
-            }),
+            BusItem::trigger(move || sender.send(ManagerCommand::UpdateManager).map_or(2, |_| 0)),
         )?;
         let sender = publisher.commands.clone();
         publisher.add(
@@ -237,10 +227,7 @@ impl ManagerPublisher {
         let sender = self.commands.clone();
         self.add(
             &format!("{root}/Install"),
-            BusItem::writable_i32(0, move |value| {
-                if value != 1 {
-                    return 2;
-                }
+            BusItem::trigger(move || {
                 sender
                     .send(ManagerCommand::Install(id.clone()))
                     .map_or(2, |_| 0)
@@ -250,10 +237,7 @@ impl ManagerPublisher {
         let sender = self.commands.clone();
         self.add(
             &format!("{root}/Uninstall"),
-            BusItem::writable_i32(0, move |value| {
-                if value != 1 {
-                    return 2;
-                }
+            BusItem::trigger(move || {
                 sender
                     .send(ManagerCommand::Uninstall {
                         id: id.clone(),
@@ -266,10 +250,7 @@ impl ManagerPublisher {
         let sender = self.commands.clone();
         self.add(
             &format!("{root}/Purge"),
-            BusItem::writable_i32(0, move |value| {
-                if value != 1 {
-                    return 2;
-                }
+            BusItem::trigger(move || {
                 sender
                     .send(ManagerCommand::Uninstall {
                         id: id.clone(),
