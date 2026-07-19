@@ -150,6 +150,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 refreshed.save_if_changed(&credentials_path)?;
                 credentials = Some(refreshed);
             }
+            Command::RuntimeReconnecting(event_generation, message)
+                if event_generation == generation =>
+            {
+                publisher
+                    .set_runtime_reconnecting(&format!("{message}; retrying automatically"))?;
+                tanks.set_disconnected()?;
+            }
             Command::RuntimeDisconnected(event_generation, message)
                 if event_generation == generation =>
             {
@@ -160,6 +167,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             Command::RuntimeConnected(_)
             | Command::RuntimeValues(_, _)
             | Command::RuntimeCredentials(_, _)
+            | Command::RuntimeReconnecting(_, _)
             | Command::RuntimeDisconnected(_, _) => {}
         }
     }

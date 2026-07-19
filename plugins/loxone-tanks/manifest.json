@@ -3,7 +3,7 @@
   "id": "loxone-tanks",
   "name": "Loxone Tanks",
   "description": "读取 Loxone 中的清水、灰水和黑水液位，并显示在 GX 水箱页面。",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-loxone-tanks"

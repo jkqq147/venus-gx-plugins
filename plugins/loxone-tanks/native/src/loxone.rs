@@ -51,6 +51,23 @@ pub enum LoxoneError {
     Authentication,
     #[error("Loxone read timed out")]
     Timeout,
+    #[error("Loxone connection closed")]
+    ConnectionClosed,
+    #[error("Miniserver is out of service")]
+    OutOfService,
+}
+
+impl LoxoneError {
+    pub const fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Io(_)
+                | Self::WebSocket(_)
+                | Self::Timeout
+                | Self::ConnectionClosed
+                | Self::OutOfService
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -281,9 +298,7 @@ impl Session {
                 }
                 Ok(Message::Pong(_)) | Ok(Message::Frame(_)) => {}
                 Ok(Message::Close(_)) => {
-                    return Err(LoxoneError::Protocol(
-                        "Miniserver closed the WebSocket".to_owned(),
-                    ));
+                    return Err(LoxoneError::ConnectionClosed);
                 }
                 Ok(message) => return Ok(message),
                 Err(tungstenite::Error::Io(error))

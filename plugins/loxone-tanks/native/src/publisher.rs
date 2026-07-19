@@ -25,6 +25,7 @@ pub enum Command {
     RuntimeConnected(u64),
     RuntimeValues(u64, Vec<(String, f64)>),
     RuntimeCredentials(u64, crate::config::Credentials),
+    RuntimeReconnecting(u64, String),
     RuntimeDisconnected(u64, String),
 }
 
@@ -198,6 +199,12 @@ impl Publisher {
 
     pub fn set_runtime_disconnected(&self, text: &str) -> zbus::Result<()> {
         self.string("/Connection/State", "disconnected")?;
+        self.string("/Connection/StatusText", text)?;
+        self.i32("/Connection/Retry", 0)
+    }
+
+    pub fn set_runtime_reconnecting(&self, text: &str) -> zbus::Result<()> {
+        self.string("/Connection/State", "reconnecting")?;
         self.string("/Connection/StatusText", text)?;
         self.i32("/Connection/Retry", 0)
     }

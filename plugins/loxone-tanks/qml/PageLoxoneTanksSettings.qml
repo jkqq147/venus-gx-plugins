@@ -31,6 +31,7 @@ MbPage {
 		if (state === "invalid-address") return "地址无效"
 		if (state === "invalid-username") return "用户名无效"
 		if (state === "connecting") return "正在连接"
+		if (state === "reconnecting") return "连接中断，正在自动重连"
 		if (state === "authenticating") return "正在验证账户"
 		if (state === "connected") return "已连接"
 		if (state === "connection-failed") return "无法连接 Miniserver"

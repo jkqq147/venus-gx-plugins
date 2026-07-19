@@ -18,6 +18,9 @@ use crate::{
 const LOXONE_EPOCH_UNIX: u64 = 1_230_768_000;
 const TOKEN_REFRESH_WINDOW: u64 = 7 * 24 * 60 * 60;
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(4 * 60);
+const STABLE_CONNECTION_WINDOW: Duration = Duration::from_secs(60);
+const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 pub struct RuntimeHandle {
     stop: Arc<AtomicBool>,
@@ -35,16 +38,7 @@ impl RuntimeHandle {
         let worker_stop = Arc::clone(&stop);
         let join = thread::Builder::new()
             .name("loxone-events".to_owned())
-            .spawn(move || {
-                if let Err(error) =
-                    run_session(generation, &config, credentials, &commands, &worker_stop)
-                {
-                    let _ = commands.send(Command::RuntimeDisconnected(
-                        generation,
-                        public_error(&error),
-                    ));
-                }
-            })
+            .spawn(move || run_runtime(generation, config, credentials, commands, worker_stop))
             .expect("failed to start Loxone event thread");
         Self {
             stop,
@@ -66,12 +60,58 @@ impl Drop for RuntimeHandle {
     }
 }
 
+fn run_runtime(
+    generation: u64,
+    config: Config,
+    mut credentials: Credentials,
+    commands: Sender<Command>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut retry_attempt = 0_u32;
+    while !stop.load(Ordering::Acquire) {
+        match run_session(
+            generation,
+            &config,
+            &mut credentials,
+            &commands,
+            &stop,
+            &mut retry_attempt,
+        ) {
+            Ok(()) => return,
+            Err(error) if error.is_retryable() => {
+                if commands
+                    .send(Command::RuntimeReconnecting(
+                        generation,
+                        public_error(&error),
+                    ))
+                    .is_err()
+                {
+                    return;
+                }
+                let delay = retry_delay(retry_attempt);
+                retry_attempt = retry_attempt.saturating_add(1);
+                if !wait_for_retry(&stop, delay) {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = commands.send(Command::RuntimeDisconnected(
+                    generation,
+                    public_error(&error),
+                ));
+                return;
+            }
+        }
+    }
+}
+
 fn run_session(
     generation: u64,
     config: &Config,
-    credentials: Credentials,
+    credentials: &mut Credentials,
     commands: &Sender<Command>,
     stop: &AtomicBool,
+    retry_attempt: &mut u32,
 ) -> Result<(), LoxoneError> {
     let mut session = Session::authenticated(
         &config.miniserver.host,
@@ -80,13 +120,14 @@ fn run_session(
     )?;
 
     if token_needs_refresh(credentials.valid_until) {
-        let refreshed = session.refresh_token(&config.miniserver.username, &credentials)?;
+        let refreshed = session.refresh_token(&config.miniserver.username, credentials)?;
         if commands
-            .send(Command::RuntimeCredentials(generation, refreshed))
+            .send(Command::RuntimeCredentials(generation, refreshed.clone()))
             .is_err()
         {
             return Ok(());
         }
+        *credentials = refreshed;
     }
 
     let candidates = require_unique_tanks(&session.fetch_and_probe()?)?;
@@ -100,7 +141,13 @@ fn run_session(
     session.enable_updates()?;
 
     let mut last_keepalive = Instant::now();
+    let connected_at = Instant::now();
+    let mut backoff_reset = false;
     while !stop.load(Ordering::Acquire) {
+        if !backoff_reset && connected_at.elapsed() >= STABLE_CONNECTION_WINDOW {
+            *retry_attempt = 0;
+            backoff_reset = true;
+        }
         match session.read_packet() {
             Ok(Packet::Values(values)) if !values.is_empty() => {
                 if commands
@@ -111,11 +158,7 @@ fn run_session(
                 }
             }
             Ok(Packet::Values(_)) => {}
-            Ok(Packet::OutOfService) => {
-                return Err(LoxoneError::Protocol(
-                    "Miniserver is out of service".to_owned(),
-                ));
-            }
+            Ok(Packet::OutOfService) => return Err(LoxoneError::OutOfService),
             Ok(Packet::KeepAlive) => last_keepalive = Instant::now(),
             Ok(Packet::Text(_) | Packet::Other) => {}
             Err(LoxoneError::Timeout) => {}
@@ -128,6 +171,28 @@ fn run_session(
         }
     }
     Ok(())
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    let multiplier = 1_u64 << attempt.min(6);
+    Duration::from_secs(
+        INITIAL_RETRY_DELAY
+            .as_secs()
+            .saturating_mul(multiplier)
+            .min(MAX_RETRY_DELAY.as_secs()),
+    )
+}
+
+fn wait_for_retry(stop: &AtomicBool, delay: Duration) -> bool {
+    let deadline = Instant::now() + delay;
+    while !stop.load(Ordering::Acquire) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return true;
+        }
+        thread::sleep(remaining.min(Duration::from_secs(1)));
+    }
+    false
 }
 
 fn verify_bindings(
@@ -203,5 +268,23 @@ mod tests {
     fn loxone_epoch_conversion_is_saturating() {
         assert!(loxone_now() > 0);
         assert!(token_needs_refresh(0));
+    }
+
+    #[test]
+    fn retry_delay_is_exponential_and_bounded() {
+        assert_eq!(retry_delay(0), Duration::from_secs(5));
+        assert_eq!(retry_delay(1), Duration::from_secs(10));
+        assert_eq!(retry_delay(3), Duration::from_secs(40));
+        assert_eq!(retry_delay(4), Duration::from_secs(60));
+        assert_eq!(retry_delay(u32::MAX), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn retries_only_transient_connection_failures() {
+        assert!(LoxoneError::OutOfService.is_retryable());
+        assert!(LoxoneError::ConnectionClosed.is_retryable());
+        assert!(LoxoneError::Timeout.is_retryable());
+        assert!(!LoxoneError::Authentication.is_retryable());
+        assert!(!LoxoneError::Protocol("invalid response".to_owned()).is_retryable());
     }
 }

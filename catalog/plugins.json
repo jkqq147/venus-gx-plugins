@@ -33,13 +33,13 @@
       "id": "loxone-tanks",
       "name": "Loxone Tanks",
       "description": "将 Loxone 中的清水、灰水和黑水液位接入 GX 原生水箱页面。",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/loxone-tanks-v0.1.0/loxone-tanks-0.1.0.vplugin",
-        "sha256": "463cad4ed9ef0f4e704ede52edc1e4822efc67bb18eb45b4f40342c2989637f2",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/loxone-tanks-v0.1.1/loxone-tanks-0.1.1.vplugin",
+        "sha256": "24b785a5096491c176b4536bb15501d60a5a7f52a2e4ebe2d5789a638eff7cd1",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "mkCXIH0fk/yrb4SHz1Q47WZKgES5B6ssolQo86oE/YDsltCRbzRV29SAvrpHLIrC0gjoQ390myDWVl5b6dSzDQ=="
+          "ed25519": "Dru+MIqSmuZg8HQY0DVtSG1vHizUghA5PtSF+EQb5M6riVUIlXkGjZtdyDARPJC2RMjqEEjJq57zjrzeUUAVBg=="
         }
       }
     }
