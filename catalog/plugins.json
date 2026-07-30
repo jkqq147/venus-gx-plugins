@@ -5,13 +5,13 @@
       "id": "tpms",
       "name": "TPMS",
       "description": "通过蓝牙或 RTL-SDR 433 MHz 接收胎压数据，并显示在 GX Dashboard。",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/tpms-v0.2.0/tpms-0.2.0.vplugin",
-        "sha256": "83b96403370903ed8c28d2a343935990649e9c169e56daa5b2fd3b6c115e2cb4",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/tpms-v0.2.1/tpms-0.2.1.vplugin",
+        "sha256": "dafef743305457516e5be194736dc4f41fe88ca69dc4dd2b24b1a739b903140d",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "VMcN1+kllez5ASWC3B7cq9Bc/4xUD0Hw3gqfVSKqfl92XKwuniUDkzx5bDRwz+XoOnusMcCLnZrFlHVyqsBJDw=="
+          "ed25519": "YfL3BcV+ydyiyfEZsFkpASW3F3yEPaSvNP/1et+0Q9MKfuE10yk4YTdkVo7zBUTH3TL7kKklQUCgv7H+MYs4AQ=="
         }
       }
     },

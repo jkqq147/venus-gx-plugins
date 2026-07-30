@@ -9,6 +9,12 @@ pub enum Event {
     Rtl433Frame {
         generation: u64,
     },
+    Rtl433Report {
+        generation: u64,
+        fsk_frames: u32,
+        decoder_events: u32,
+        decoded_ok: u32,
+    },
     Rtl433Exited {
         generation: u64,
         success: bool,
