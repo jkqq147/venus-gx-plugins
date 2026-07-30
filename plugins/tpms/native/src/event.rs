@@ -1,13 +1,18 @@
-use crate::state::{Reading, Wheel};
+use crate::state::{Reading, ReceiverMode, Wheel};
 
 pub enum Event {
-    Reading(Box<Reading>),
+    BleReading {
+        generation: u64,
+        reading: Box<Reading>,
+    },
     BluetoothStats {
+        generation: u64,
         device_count: usize,
         manufacturer_data_count: usize,
     },
-    Rtl433Frame {
+    Rtl433Reading {
         generation: u64,
+        reading: Box<Reading>,
     },
     Rtl433Report {
         generation: u64,
@@ -23,5 +28,9 @@ pub enum Event {
         index: usize,
         wheel: Option<Wheel>,
     },
-    ScannerFailed(String),
+    SetReceiverMode(ReceiverMode),
+    BleScannerFailed {
+        generation: u64,
+        error: String,
+    },
 }

@@ -5,7 +5,7 @@ use zbus::blocking::Connection;
 use crate::{
     bus_item::{BusItem, BusItemHandle},
     event::Event,
-    state::{unix_time, Reading, TpmsState, Wheel, DISCOVERED_LIMIT},
+    state::{unix_time, Reading, ReceiverMode, TpmsState, Wheel, DISCOVERED_LIMIT},
 };
 
 const UNASSIGNED: &str = "unassigned";
@@ -17,6 +17,7 @@ pub struct VenusPublisher {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BluetoothStats {
+    pub enabled: bool,
     pub adapter_index: Option<u16>,
     pub active: bool,
     pub device_count: usize,
@@ -25,13 +26,16 @@ pub struct BluetoothStats {
 
 #[derive(Debug, Clone, Default)]
 pub struct Rtl433Stats {
+    pub enabled: bool,
     pub active: bool,
+    pub ready: bool,
     pub frame_count: u32,
     pub fsk_activity_count: u32,
     pub decoder_event_count: u32,
     pub rejected_frame_count: u32,
     pub stats_heartbeat_count: u32,
     pub recent_fsk_activity: bool,
+    pub recent_valid_activity: bool,
     pub last_error: String,
 }
 
@@ -46,6 +50,7 @@ impl VenusPublisher {
         connection: Connection,
         service_name: &str,
         events: Sender<Event>,
+        receiver_mode: ReceiverMode,
     ) -> zbus::Result<Self> {
         let mut publisher = Self {
             connection,
@@ -69,6 +74,18 @@ impl VenusPublisher {
         ] {
             publisher.add(path, BusItem::string(value))?;
         }
+        let receiver_mode_events = events.clone();
+        publisher.add(
+            "/ReceiverMode",
+            BusItem::writable_string(receiver_mode.key(), move |value| {
+                let Some(receiver_mode) = ReceiverMode::parse(&value) else {
+                    return 2;
+                };
+                receiver_mode_events
+                    .send(Event::SetReceiverMode(receiver_mode))
+                    .map_or(2, |_| 0)
+            }),
+        )?;
         for (path, value) in [
             ("/DeviceInstance", 0),
             ("/ProductId", 0),
@@ -76,8 +93,10 @@ impl VenusPublisher {
             ("/Status", 0),
             ("/DiscoveredCount", 0),
             ("/Bluetooth/Discovering", 0),
+            ("/Bluetooth/Enabled", 0),
             ("/Bluetooth/DeviceCount", 0),
             ("/Bluetooth/ManufacturerDataCount", 0),
+            ("/Receivers/Rtl433/Enabled", 0),
             ("/Receivers/Rtl433/Active", 0),
             ("/Receivers/Rtl433/FrameCount", 0),
             ("/Receivers/Rtl433/FskActivityCount", 0),
@@ -181,6 +200,7 @@ impl VenusPublisher {
 
     pub fn publish(&self, state: &TpmsState, receivers: &ReceiverStats) -> zbus::Result<()> {
         let bluetooth = receivers.bluetooth;
+        self.string("/ReceiverMode", state.receiver_mode().key())?;
         let status = if bluetooth.active || receivers.rtl433.active {
             "Scanning"
         } else {
@@ -189,7 +209,9 @@ impl VenusPublisher {
         self.string("/StatusText", status)?;
         self.string(
             "/Bluetooth/StatusText",
-            if bluetooth.active {
+            if !bluetooth.enabled {
+                "Disabled"
+            } else if bluetooth.active {
                 "Scanning"
             } else {
                 "No Bluetooth adapter"
@@ -204,7 +226,9 @@ impl VenusPublisher {
         )?;
         self.string(
             "/Bluetooth/ReceiverStatus",
-            if !bluetooth.active {
+            if !bluetooth.enabled {
+                "Disabled"
+            } else if !bluetooth.active {
                 "Unavailable"
             } else if bluetooth.device_count > 0 {
                 "Receiving"
@@ -212,11 +236,16 @@ impl VenusPublisher {
                 "Listening"
             },
         )?;
+        self.i32("/Bluetooth/Enabled", i32::from(bluetooth.enabled))?;
         self.i32("/Bluetooth/Discovering", i32::from(bluetooth.active))?;
         self.string(
             "/Receivers/Rtl433/StatusText",
-            if receivers.rtl433.active {
-                if receivers.rtl433.frame_count > 0 {
+            if !receivers.rtl433.enabled {
+                "Disabled"
+            } else if receivers.rtl433.active {
+                if !receivers.rtl433.ready {
+                    "Starting"
+                } else if receivers.rtl433.recent_valid_activity {
                     "Receiving"
                 } else if receivers.rtl433.recent_fsk_activity {
                     "RF activity"
@@ -228,6 +257,10 @@ impl VenusPublisher {
             },
         )?;
         self.string("/Receivers/Rtl433/LastError", &receivers.rtl433.last_error)?;
+        self.i32(
+            "/Receivers/Rtl433/Enabled",
+            i32::from(receivers.rtl433.enabled),
+        )?;
         self.i32(
             "/Receivers/Rtl433/Active",
             i32::from(receivers.rtl433.active),

@@ -3,7 +3,7 @@
   "id": "tpms",
   "name": "TPMS",
   "description": "通过蓝牙或 RTL-SDR 433 MHz 接收胎压数据，并显示在 GX Dashboard。",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "runtime": {
     "kind": "native-service",
     "executable": "bin/venus-tpms",

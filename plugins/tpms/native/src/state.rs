@@ -71,6 +71,39 @@ impl SourceKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiverMode {
+    #[default]
+    Automatic,
+    BluetoothOnly,
+    Rtl433Only,
+}
+
+impl ReceiverMode {
+    pub const ALL: [Self; 3] = [Self::Automatic, Self::BluetoothOnly, Self::Rtl433Only];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::BluetoothOnly => "bluetooth_only",
+            Self::Rtl433Only => "rtl433_only",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == value)
+    }
+
+    pub fn uses_bluetooth(self) -> bool {
+        !matches!(self, Self::Rtl433Only)
+    }
+
+    pub fn uses_rtl433(self) -> bool {
+        !matches!(self, Self::BluetoothOnly)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reading {
     pub sensor_key: String,
@@ -121,6 +154,8 @@ impl Reading {
 struct PersistentState {
     #[serde(default)]
     bindings: BTreeMap<Wheel, String>,
+    #[serde(default)]
+    receiver_mode: ReceiverMode,
 }
 
 pub struct TpmsState {
@@ -150,6 +185,21 @@ impl TpmsState {
             .get(&wheel)
             .map(String::as_str)
             .unwrap_or("")
+    }
+
+    pub fn receiver_mode(&self) -> ReceiverMode {
+        self.persistent.receiver_mode
+    }
+
+    pub fn set_receiver_mode(&mut self, receiver_mode: ReceiverMode) -> io::Result<()> {
+        if receiver_mode == self.persistent.receiver_mode {
+            return Ok(());
+        }
+        let mut next = self.persistent.clone();
+        next.receiver_mode = receiver_mode;
+        self.save(&next)?;
+        self.persistent = next;
+        Ok(())
     }
 
     pub fn assigned_wheel(&self, sensor_key: &str) -> Option<Wheel> {
@@ -272,7 +322,7 @@ pub fn unix_time() -> i64 {
 mod tests {
     use std::{fs, os::unix::fs::MetadataExt, thread, time::Duration};
 
-    use super::{Reading, SourceKind, TpmsState, Wheel};
+    use super::{Reading, ReceiverMode, SourceKind, TpmsState, Wheel};
 
     fn reading(id: &str, rssi: i32) -> Reading {
         Reading {
@@ -320,6 +370,30 @@ mod tests {
         let after = fs::metadata(&path).unwrap();
         assert_eq!(before.ino(), after.ino());
         assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+    }
+
+    #[test]
+    fn receiver_mode_defaults_to_automatic_and_persists_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let mut state = TpmsState::load(&path).unwrap();
+        assert_eq!(state.receiver_mode(), ReceiverMode::Automatic);
+
+        state.set_receiver_mode(ReceiverMode::Rtl433Only).unwrap();
+        assert_eq!(
+            TpmsState::load(&path).unwrap().receiver_mode(),
+            ReceiverMode::Rtl433Only
+        );
+    }
+
+    #[test]
+    fn receiver_modes_select_only_the_requested_sources() {
+        assert!(ReceiverMode::Automatic.uses_bluetooth());
+        assert!(ReceiverMode::Automatic.uses_rtl433());
+        assert!(ReceiverMode::BluetoothOnly.uses_bluetooth());
+        assert!(!ReceiverMode::BluetoothOnly.uses_rtl433());
+        assert!(!ReceiverMode::Rtl433Only.uses_bluetooth());
+        assert!(ReceiverMode::Rtl433Only.uses_rtl433());
     }
 
     #[test]
@@ -393,6 +467,7 @@ mod tests {
 
         let after = fs::metadata(&path).unwrap();
         assert_eq!(state.binding(Wheel::FrontLeft), "sensor");
+        assert_eq!(state.receiver_mode(), ReceiverMode::Automatic);
         assert!(state.reading_for_wheel(Wheel::FrontLeft).is_none());
         assert_eq!(fs::read(&path).unwrap(), legacy);
         assert_eq!(before.ino(), after.ino());

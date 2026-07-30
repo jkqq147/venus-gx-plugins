@@ -15,13 +15,13 @@ MbPage {
 	function statusText(value) {
 		if (!root.isChinese)
 			return value
-		return value === "Scanning" ? "扫描中" : value === "No TPMS receiver" ? "未检测到 TPMS 接收器" : value === "No Bluetooth adapter" ? "未检测到蓝牙适配器" : value === "Starting" ? "启动中" : value
+		return value === "Scanning" ? "扫描中" : value === "No TPMS receiver" ? "未检测到 TPMS 接收器" : value === "No Bluetooth adapter" ? "未检测到蓝牙适配器" : value === "Disabled" ? "已停用" : value === "Starting" ? "启动中" : value
 	}
 
 	function receiverText(value) {
 		if (!root.isChinese)
 			return value
-		return value === "Receiving" ? "接收中" : value === "RF activity" ? "检测到射频活动" : value === "Listening" ? "等待广播" : value === "Unavailable" ? "不可用" : value === "Starting" ? "启动中" : value
+		return value === "Receiving" ? "接收中" : value === "RF activity" ? "检测到射频活动" : value === "Listening" ? "等待广播" : value === "Unavailable" ? "不可用" : value === "Disabled" ? "已停用" : value === "Starting" ? "启动中" : value
 	}
 
 	model: VisibleItemModel {

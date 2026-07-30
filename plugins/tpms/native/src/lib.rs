@@ -41,11 +41,11 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
 
     use event::Event;
     use source::{
-        ble,
+        ble::BleScanner,
         rtl433::{retry_delay_seconds, Rtl433Process},
     };
     use state::{unix_time, TpmsState};
-    use venus::{ReceiverStats, VenusPublisher};
+    use venus::{BluetoothStats, ReceiverStats, VenusPublisher};
     use zbus::blocking::Connection;
 
     const DEFAULT_SERVICE_NAME: &str = "com.victronenergy.tpms.main";
@@ -57,8 +57,13 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         env::var("VENUS_TPMS_STATE_PATH").unwrap_or_else(|_| DEFAULT_STATE_PATH.to_owned());
     let connection = Connection::system()?;
     let (events_tx, events_rx) = mpsc::channel();
-    let publisher = VenusPublisher::new(connection.clone(), &service_name, events_tx.clone())?;
     let mut state = TpmsState::load(state_path)?;
+    let publisher = VenusPublisher::new(
+        connection.clone(),
+        &service_name,
+        events_tx.clone(),
+        state.receiver_mode(),
+    )?;
     let mut receivers = ReceiverStats::default();
     publisher.publish(&state, &receivers)?;
 
@@ -76,15 +81,71 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_adapter_attempt = Instant::now() - ADAPTER_RETRY_INTERVAL;
     let mut last_discovery_check = Instant::now() - Duration::from_secs(5);
     let mut discovery = None;
-    let mut scanner_running = false;
-    let mut rtl433_process = None;
+    let mut ble_scanner: Option<BleScanner> = None;
+    let mut ble_generation = 0_u64;
+    let mut rtl433_process: Option<Rtl433Process> = None;
     let mut rtl433_generation = 0_u64;
     let mut rtl433_failures = 0_u32;
     let mut rtl433_retry_seconds = 0_u64;
     let mut last_rtl433_attempt = Instant::now() - Duration::from_secs(60);
     let mut last_rtl433_heartbeat = Instant::now();
+    let mut applied_receiver_mode = None;
     loop {
-        if rtl433_process.is_none()
+        let receiver_mode = state.receiver_mode();
+        if applied_receiver_mode != Some(receiver_mode) {
+            if receiver_mode.uses_bluetooth() {
+                if !receivers.bluetooth.enabled {
+                    receivers.bluetooth = BluetoothStats {
+                        enabled: true,
+                        ..BluetoothStats::default()
+                    };
+                    last_adapter_attempt = Instant::now() - ADAPTER_RETRY_INTERVAL;
+                }
+            } else {
+                ble_generation = ble_generation.wrapping_add(1);
+                discovery = None;
+                if let Some(mut scanner) = ble_scanner.take() {
+                    scanner.stop();
+                }
+                receivers.bluetooth = BluetoothStats::default();
+            }
+
+            if receiver_mode.uses_rtl433() {
+                if !receivers.rtl433.enabled {
+                    receivers.rtl433.enabled = true;
+                    receivers.rtl433.active = false;
+                    receivers.rtl433.ready = false;
+                    receivers.rtl433.recent_fsk_activity = false;
+                    receivers.rtl433.recent_valid_activity = false;
+                    receivers.rtl433.last_error.clear();
+                    rtl433_failures = 0;
+                    rtl433_retry_seconds = 0;
+                    last_rtl433_attempt = Instant::now() - Duration::from_secs(60);
+                }
+            } else {
+                rtl433_generation = rtl433_generation.wrapping_add(1);
+                let stop_error = if let Some(mut process) = rtl433_process.take() {
+                    process.stop().err()
+                } else {
+                    None
+                };
+                receivers.rtl433.enabled = false;
+                receivers.rtl433.active = false;
+                receivers.rtl433.ready = false;
+                receivers.rtl433.recent_fsk_activity = false;
+                receivers.rtl433.recent_valid_activity = false;
+                receivers.rtl433.last_error = stop_error
+                    .map(|error| format!("failed to stop rtl_433: {error}"))
+                    .unwrap_or_default();
+                rtl433_failures = 0;
+                rtl433_retry_seconds = 0;
+            }
+            applied_receiver_mode = Some(receiver_mode);
+            publisher.publish(&state, &receivers)?;
+        }
+
+        if receivers.rtl433.enabled
+            && rtl433_process.is_none()
             && last_rtl433_attempt.elapsed() >= Duration::from_secs(rtl433_retry_seconds)
         {
             last_rtl433_attempt = Instant::now();
@@ -93,40 +154,52 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(process) => {
                     rtl433_process = Some(process);
                     last_rtl433_heartbeat = Instant::now();
-                    rtl433_failures = 0;
-                    rtl433_retry_seconds = 0;
                     receivers.rtl433.active = true;
+                    receivers.rtl433.ready = false;
                     receivers.rtl433.recent_fsk_activity = false;
-                    receivers.rtl433.last_error.clear();
+                    receivers.rtl433.recent_valid_activity = false;
                     publisher.publish(&state, &receivers)?;
                 }
                 Err(error) => {
+                    rtl433_generation = rtl433_generation.wrapping_add(1);
                     rtl433_failures = rtl433_failures.saturating_add(1);
                     rtl433_retry_seconds = retry_delay_seconds(rtl433_failures);
                     receivers.rtl433.active = false;
+                    receivers.rtl433.ready = false;
+                    receivers.rtl433.recent_fsk_activity = false;
+                    receivers.rtl433.recent_valid_activity = false;
                     receivers.rtl433.last_error = error.to_string();
                     publisher.publish(&state, &receivers)?;
                 }
             }
         }
 
-        if adapter_retry_due(discovery.is_some(), last_adapter_attempt.elapsed()) {
+        if receivers.bluetooth.enabled
+            && adapter_retry_due(discovery.is_some(), last_adapter_attempt.elapsed())
+        {
             last_adapter_attempt = Instant::now();
             if let Ok(adapter_index) = bluez::lowest_adapter_index() {
                 if let Ok(active_discovery) =
                     bluez::BluezDiscovery::start(&connection, adapter_index)
                 {
-                    discovery = Some(active_discovery);
-                    receivers.bluetooth = venus::BluetoothStats {
-                        adapter_index: Some(adapter_index),
-                        active: true,
-                        ..venus::BluetoothStats::default()
-                    };
-                    if !scanner_running {
-                        ble::spawn(adapter_index, events_tx.clone());
-                        scanner_running = true;
+                    ble_generation = ble_generation.wrapping_add(1);
+                    match BleScanner::start(adapter_index, ble_generation, events_tx.clone()) {
+                        Ok(scanner) => {
+                            discovery = Some(active_discovery);
+                            ble_scanner = Some(scanner);
+                            receivers.bluetooth = BluetoothStats {
+                                enabled: true,
+                                adapter_index: Some(adapter_index),
+                                active: true,
+                                ..BluetoothStats::default()
+                            };
+                            publisher.publish(&state, &receivers)?;
+                        }
+                        Err(error) => {
+                            drop(active_discovery);
+                            eprintln!("failed to start HCI scanner: {error}");
+                        }
                     }
-                    publisher.publish(&state, &receivers)?;
                 }
             }
         }
@@ -135,9 +208,16 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(active_discovery) = discovery.as_ref() {
                 if !active_discovery.is_active() {
                     eprintln!("BlueZ discovery stopped; reconnecting");
+                    ble_generation = ble_generation.wrapping_add(1);
                     discovery = None;
+                    if let Some(mut scanner) = ble_scanner.take() {
+                        scanner.stop();
+                    }
                     last_adapter_attempt = Instant::now() - ADAPTER_RETRY_INTERVAL;
-                    receivers.bluetooth = venus::BluetoothStats::default();
+                    receivers.bluetooth = BluetoothStats {
+                        enabled: true,
+                        ..BluetoothStats::default()
+                    };
                     publisher.publish(&state, &receivers)?;
                 }
             }
@@ -145,20 +225,33 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         match events_rx.recv_timeout(Duration::from_secs(1)) {
-            Ok(Event::Reading(reading)) => {
+            Ok(Event::BleReading {
+                generation,
+                reading,
+            }) if generation == ble_generation && receivers.bluetooth.enabled => {
                 state.update(*reading);
                 publisher.publish(&state, &receivers)?;
             }
             Ok(Event::BluetoothStats {
+                generation,
                 device_count,
                 manufacturer_data_count,
-            }) => {
+            }) if generation == ble_generation && receivers.bluetooth.enabled => {
                 receivers.bluetooth.device_count = device_count;
                 receivers.bluetooth.manufacturer_data_count = manufacturer_data_count;
                 publisher.publish(&state, &receivers)?;
             }
-            Ok(Event::Rtl433Frame { generation }) if generation == rtl433_generation => {
+            Ok(Event::Rtl433Reading {
+                generation,
+                reading,
+            }) if generation == rtl433_generation && receivers.rtl433.enabled => {
+                state.update(*reading);
                 receivers.rtl433.frame_count = receivers.rtl433.frame_count.saturating_add(1);
+                receivers.rtl433.ready = true;
+                receivers.rtl433.recent_valid_activity = true;
+                receivers.rtl433.last_error.clear();
+                rtl433_failures = 0;
+                rtl433_retry_seconds = 0;
                 publisher.publish(&state, &receivers)?;
             }
             Ok(Event::Rtl433Report {
@@ -166,8 +259,9 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 fsk_frames,
                 decoder_events,
                 decoded_ok,
-            }) if generation == rtl433_generation => {
+            }) if generation == rtl433_generation && receivers.rtl433.enabled => {
                 last_rtl433_heartbeat = Instant::now();
+                receivers.rtl433.ready = true;
                 receivers.rtl433.stats_heartbeat_count =
                     receivers.rtl433.stats_heartbeat_count.saturating_add(1);
                 receivers.rtl433.fsk_activity_count = receivers
@@ -183,18 +277,24 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                     .rejected_frame_count
                     .saturating_add(decoder_events.saturating_sub(decoded_ok));
                 receivers.rtl433.recent_fsk_activity = fsk_frames > 0;
+                receivers.rtl433.recent_valid_activity = decoded_ok > 0;
+                receivers.rtl433.last_error.clear();
+                rtl433_failures = 0;
+                rtl433_retry_seconds = 0;
                 publisher.publish(&state, &receivers)?;
             }
             Ok(Event::Rtl433Exited {
                 generation,
                 success,
-            }) if generation == rtl433_generation => {
+            }) if generation == rtl433_generation && receivers.rtl433.enabled => {
                 if let Some(process) = rtl433_process.as_mut() {
                     process.mark_exited();
                 }
                 rtl433_process = None;
                 receivers.rtl433.active = false;
+                receivers.rtl433.ready = false;
                 receivers.rtl433.recent_fsk_activity = false;
+                receivers.rtl433.recent_valid_activity = false;
                 rtl433_failures = rtl433_failures.saturating_add(1);
                 rtl433_retry_seconds = retry_delay_seconds(rtl433_failures);
                 receivers.rtl433.last_error = if success {
@@ -205,7 +305,9 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 last_rtl433_attempt = Instant::now();
                 publisher.publish(&state, &receivers)?;
             }
-            Ok(Event::Rtl433Frame { .. })
+            Ok(Event::BleReading { .. })
+            | Ok(Event::BluetoothStats { .. })
+            | Ok(Event::Rtl433Reading { .. })
             | Ok(Event::Rtl433Report { .. })
             | Ok(Event::Rtl433Exited { .. }) => {}
             Ok(Event::Assign { index, wheel }) => {
@@ -218,28 +320,49 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                     publisher.publish(&state, &receivers)?;
                 }
             }
-            Ok(Event::ScannerFailed(error)) => {
-                eprintln!("HCI scanner stopped: {error}");
-                discovery = None;
-                last_adapter_attempt = Instant::now() - ADAPTER_RETRY_INTERVAL;
-                scanner_running = false;
-                receivers.bluetooth = venus::BluetoothStats::default();
+            Ok(Event::SetReceiverMode(receiver_mode)) => {
+                state.set_receiver_mode(receiver_mode)?;
                 publisher.publish(&state, &receivers)?;
             }
+            Ok(Event::BleScannerFailed { generation, error })
+                if generation == ble_generation && receivers.bluetooth.enabled =>
+            {
+                eprintln!("HCI scanner stopped: {error}");
+                ble_generation = ble_generation.wrapping_add(1);
+                discovery = None;
+                if let Some(mut scanner) = ble_scanner.take() {
+                    scanner.stop();
+                }
+                last_adapter_attempt = Instant::now() - ADAPTER_RETRY_INTERVAL;
+                receivers.bluetooth = BluetoothStats {
+                    enabled: true,
+                    ..BluetoothStats::default()
+                };
+                publisher.publish(&state, &receivers)?;
+            }
+            Ok(Event::BleScannerFailed { .. }) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(io::Error::other("HCI event channel disconnected").into());
+                return Err(io::Error::other("TPMS event channel disconnected").into());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
-        if rtl433_heartbeat_expired(rtl433_process.is_some(), last_rtl433_heartbeat.elapsed()) {
+        if receivers.rtl433.enabled
+            && rtl433_heartbeat_expired(rtl433_process.is_some(), last_rtl433_heartbeat.elapsed())
+        {
             eprintln!("rtl_433 stats heartbeat timed out; restarting receiver");
-            if let Some(mut process) = rtl433_process.take() {
-                let _ = process.stop();
-            }
             rtl433_generation = rtl433_generation.wrapping_add(1);
+            let stop_error = if let Some(mut process) = rtl433_process.take() {
+                process.stop().err()
+            } else {
+                None
+            };
             receivers.rtl433.active = false;
+            receivers.rtl433.ready = false;
             receivers.rtl433.recent_fsk_activity = false;
-            receivers.rtl433.last_error = "rtl_433 stats heartbeat timed out".to_owned();
+            receivers.rtl433.recent_valid_activity = false;
+            receivers.rtl433.last_error = stop_error
+                .map(|error| format!("rtl_433 heartbeat timed out; stop failed: {error}"))
+                .unwrap_or_else(|| "rtl_433 stats heartbeat timed out".to_owned());
             rtl433_failures = rtl433_failures.saturating_add(1);
             rtl433_retry_seconds = retry_delay_seconds(rtl433_failures);
             last_rtl433_attempt = Instant::now();

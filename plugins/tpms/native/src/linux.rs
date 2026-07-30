@@ -82,14 +82,24 @@ where
     run_with_handlers(adapter_index, handler, |_| {})
 }
 
-pub fn run_with_handlers<F, S>(
+pub fn run_with_handlers<F, S>(adapter_index: u16, handler: F, stats_handler: S) -> io::Result<()>
+where
+    F: FnMut(Observation),
+    S: FnMut(ScanStats),
+{
+    run_with_handlers_until(adapter_index, handler, stats_handler, || false)
+}
+
+pub fn run_with_handlers_until<F, S, C>(
     adapter_index: u16,
     mut handler: F,
     mut stats_handler: S,
+    should_stop: C,
 ) -> io::Result<()>
 where
     F: FnMut(Observation),
     S: FnMut(ScanStats),
+    C: Fn() -> bool,
 {
     let socket = open_hci_socket(adapter_index)?;
     let mut last_emission = HashMap::<String, LastEmission>::new();
@@ -100,7 +110,38 @@ where
     let mut packet = [0_u8; 2048];
 
     eprintln!("monitoring raw HCI advertisements on hci{adapter_index}; press Ctrl-C to stop");
-    loop {
+    while !should_stop() {
+        let mut descriptor = libc::pollfd {
+            fd: socket.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut descriptor, 1, 1_000) };
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if descriptor.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(io::Error::other("Bluetooth HCI socket stopped"));
+        }
+        if ready == 0 {
+            publish_scan_stats(
+                &mut recent_devices,
+                &mut recent_manufacturer_devices,
+                &mut names,
+                &mut last_emission,
+                &mut last_stats,
+                &mut stats_handler,
+            );
+            continue;
+        }
+        if descriptor.revents & libc::POLLIN == 0 {
+            continue;
+        }
+
         let read = unsafe {
             libc::read(
                 socket.as_raw_fd(),
@@ -151,21 +192,42 @@ where
                 };
                 handler(observation);
             }
-
-            if last_stats.elapsed() >= Duration::from_secs(STATS_INTERVAL_SECONDS) {
-                let cutoff = Duration::from_secs(RECENT_DEVICE_SECONDS);
-                recent_devices.retain(|_, seen| seen.elapsed() <= cutoff);
-                recent_manufacturer_devices.retain(|_, seen| seen.elapsed() <= cutoff);
-                names.retain(|address, _| recent_devices.contains_key(address));
-                last_emission.retain(|_, emission| emission.at.elapsed() <= cutoff);
-                stats_handler(ScanStats {
-                    device_count: recent_devices.len(),
-                    manufacturer_data_count: recent_manufacturer_devices.len(),
-                });
-                last_stats = Instant::now();
-            }
         }
+        publish_scan_stats(
+            &mut recent_devices,
+            &mut recent_manufacturer_devices,
+            &mut names,
+            &mut last_emission,
+            &mut last_stats,
+            &mut stats_handler,
+        );
     }
+    Ok(())
+}
+
+fn publish_scan_stats<S>(
+    recent_devices: &mut HashMap<String, Instant>,
+    recent_manufacturer_devices: &mut HashMap<String, Instant>,
+    names: &mut HashMap<String, String>,
+    last_emission: &mut HashMap<String, LastEmission>,
+    last_stats: &mut Instant,
+    stats_handler: &mut S,
+) where
+    S: FnMut(ScanStats),
+{
+    if last_stats.elapsed() < Duration::from_secs(STATS_INTERVAL_SECONDS) {
+        return;
+    }
+    let cutoff = Duration::from_secs(RECENT_DEVICE_SECONDS);
+    recent_devices.retain(|_, seen| seen.elapsed() <= cutoff);
+    recent_manufacturer_devices.retain(|_, seen| seen.elapsed() <= cutoff);
+    names.retain(|address, _| recent_devices.contains_key(address));
+    last_emission.retain(|_, emission| emission.at.elapsed() <= cutoff);
+    stats_handler(ScanStats {
+        device_count: recent_devices.len(),
+        manufacturer_data_count: recent_manufacturer_devices.len(),
+    });
+    *last_stats = Instant::now();
 }
 
 fn adapter_index_from_args() -> io::Result<u16> {
