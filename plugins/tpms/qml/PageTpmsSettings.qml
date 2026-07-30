@@ -9,6 +9,16 @@ MbPage {
 	property bool isChinese: guiLanguage.valid && guiLanguage.value === "zh"
 
 	model: VisibleItemModel {
+		MbItemOptions {
+			description: root.isChinese ? "接收模式" : qsTr("Receiver mode")
+			bind: "com.victronenergy.tpms.main/ReceiverMode"
+			possibleValues: [
+				MbOption { description: root.isChinese ? "自动" : qsTr("Automatic"); value: "automatic" },
+				MbOption { description: root.isChinese ? "仅蓝牙" : qsTr("Bluetooth only"); value: "bluetooth_only" },
+				MbOption { description: root.isChinese ? "仅 433 MHz" : qsTr("433 MHz only"); value: "rtl433_only" }
+			]
+		}
+
 		MbSubMenu {
 			description: root.isChinese ? "左前" : qsTr("Front left")
 			item: VBusItem { value: [] }

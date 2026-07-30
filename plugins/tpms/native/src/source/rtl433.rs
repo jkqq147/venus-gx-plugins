@@ -147,17 +147,21 @@ mod process {
         os::unix::process::CommandExt,
         path::Path,
         process::{Command, Stdio},
-        sync::mpsc::Sender,
+        sync::{mpsc::Sender, Arc, Condvar, Mutex},
         thread,
+        time::Duration,
     };
 
     use crate::event::Event;
 
     use super::{parse_output_line, ParsedLine, PROTOCOL_NUMBER, STATS_INTERVAL_SECONDS};
 
+    const TERMINATE_GRACE: Duration = Duration::from_secs(2);
+    const KILL_GRACE: Duration = Duration::from_secs(2);
     pub struct Rtl433Process {
         pid: u32,
         running: bool,
+        exited: Arc<(Mutex<bool>, Condvar)>,
     }
 
     impl Rtl433Process {
@@ -203,57 +207,85 @@ mod process {
                 .ok_or_else(|| io::Error::other("rtl_433 stderr was not captured"))?;
 
             let stdout_events = events.clone();
-            thread::Builder::new()
-                .name("rtl433-json".to_owned())
-                .spawn(move || {
-                    for line in BufReader::new(stdout).lines() {
-                        let Ok(line) = line else {
-                            break;
-                        };
-                        match parse_output_line(&line) {
-                            Ok(ParsedLine::Reading(reading)) => {
-                                let _ = stdout_events.send(Event::Reading(reading));
-                                let _ = stdout_events.send(Event::Rtl433Frame { generation });
+            if let Err(error) =
+                thread::Builder::new()
+                    .name("rtl433-json".to_owned())
+                    .spawn(move || {
+                        for line in BufReader::new(stdout).lines() {
+                            let Ok(line) = line else {
+                                break;
+                            };
+                            match parse_output_line(&line) {
+                                Ok(ParsedLine::Reading(reading)) => {
+                                    let _ = stdout_events.send(Event::Rtl433Reading {
+                                        generation,
+                                        reading,
+                                    });
+                                }
+                                Ok(ParsedLine::Report(report)) => {
+                                    let _ = stdout_events.send(Event::Rtl433Report {
+                                        generation,
+                                        fsk_frames: report.fsk_frames,
+                                        decoder_events: report.decoder_events,
+                                        decoded_ok: report.decoded_ok,
+                                    });
+                                }
+                                Ok(ParsedLine::Ignored) => {}
+                                Err(error) => eprintln!("invalid rtl_433 JSON: {error}"),
                             }
-                            Ok(ParsedLine::Report(report)) => {
-                                let _ = stdout_events.send(Event::Rtl433Report {
-                                    generation,
-                                    fsk_frames: report.fsk_frames,
-                                    decoder_events: report.decoder_events,
-                                    decoded_ok: report.decoded_ok,
-                                });
-                            }
-                            Ok(ParsedLine::Ignored) => {}
-                            Err(error) => eprintln!("invalid rtl_433 JSON: {error}"),
                         }
-                    }
-                })?;
+                    })
+            {
+                kill_and_reap(pid);
+                return Err(error);
+            }
 
-            thread::Builder::new()
-                .name("rtl433-log".to_owned())
-                .spawn(move || {
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        eprintln!("rtl_433: {line}");
-                    }
-                })?;
+            if let Err(error) =
+                thread::Builder::new()
+                    .name("rtl433-log".to_owned())
+                    .spawn(move || {
+                        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                            eprintln!("rtl_433: {line}");
+                        }
+                    })
+            {
+                kill_and_reap(pid);
+                return Err(error);
+            }
 
             let wait_events = events.clone();
-            thread::Builder::new()
-                .name("rtl433-wait".to_owned())
-                .spawn(move || {
-                    let mut status = 0;
-                    let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
-                    let success = waited == pid as libc::pid_t
-                        && libc::WIFEXITED(status)
-                        && libc::WEXITSTATUS(status) == 0;
-                    let _ = wait_events.send(Event::Rtl433Exited {
-                        generation,
-                        success,
-                    });
-                })?;
+            let exited = Arc::new((Mutex::new(false), Condvar::new()));
+            let wait_exited = Arc::clone(&exited);
+            if let Err(error) =
+                thread::Builder::new()
+                    .name("rtl433-wait".to_owned())
+                    .spawn(move || {
+                        let mut status = 0;
+                        let waited = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+                        let success = waited == pid as libc::pid_t
+                            && libc::WIFEXITED(status)
+                            && libc::WEXITSTATUS(status) == 0;
+                        let (lock, condition) = &*wait_exited;
+                        if let Ok(mut exited) = lock.lock() {
+                            *exited = true;
+                            condition.notify_all();
+                        }
+                        let _ = wait_events.send(Event::Rtl433Exited {
+                            generation,
+                            success,
+                        });
+                    })
+            {
+                kill_and_reap(pid);
+                return Err(error);
+            }
 
             drop(child);
-            Ok(Self { pid, running: true })
+            Ok(Self {
+                pid,
+                running: true,
+                exited,
+            })
         }
 
         pub fn mark_exited(&mut self) {
@@ -264,12 +296,18 @@ mod process {
             if !self.running {
                 return Ok(());
             }
-            let result = unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGTERM) };
-            if result != 0 {
-                let error = io::Error::last_os_error();
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    return Err(error);
-                }
+            send_signal(self.pid, libc::SIGTERM)?;
+            if wait_until_exited(&self.exited, TERMINATE_GRACE)? {
+                self.running = false;
+                return Ok(());
+            }
+
+            send_signal(self.pid, libc::SIGKILL)?;
+            if !wait_until_exited(&self.exited, KILL_GRACE)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("rtl_433 process {} did not stop", self.pid),
+                ));
             }
             self.running = false;
             Ok(())
@@ -280,6 +318,41 @@ mod process {
         fn drop(&mut self) {
             let _ = self.stop();
         }
+    }
+
+    fn send_signal(pid: u32, signal: libc::c_int) -> io::Result<()> {
+        let result = unsafe { libc::kill(pid as libc::pid_t, signal) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    fn kill_and_reap(pid: u32) {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            let mut status = 0;
+            libc::waitpid(pid as libc::pid_t, &mut status, 0);
+        }
+    }
+
+    fn wait_until_exited(
+        exited: &Arc<(Mutex<bool>, Condvar)>,
+        timeout: Duration,
+    ) -> io::Result<bool> {
+        let (lock, condition) = &**exited;
+        let exited = lock
+            .lock()
+            .map_err(|_| io::Error::other("rtl_433 exit state poisoned"))?;
+        let (exited, _) = condition
+            .wait_timeout_while(exited, timeout, |exited| !*exited)
+            .map_err(|_| io::Error::other("rtl_433 exit state poisoned"))?;
+        Ok(*exited)
     }
 }
 
