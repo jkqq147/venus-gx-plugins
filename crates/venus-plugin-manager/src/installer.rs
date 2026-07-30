@@ -44,7 +44,7 @@ const SETTINGS_BLOCK: &str = r#"
 
 const DEVICE_ENTRIES_BLOCK: &str = r#"
 		// BEGIN venus-plugin-manager-device-entries
-		PluginDeviceEntriesModel {}
+		PluginDeviceEntriesModel { view: listview }
 		// END venus-plugin-manager-device-entries
 
 "#;
@@ -748,8 +748,23 @@ mod tests {
         assert!(!contents.contains(LEGACY_DASHBOARD_BEGIN));
         assert_eq!(contents.matches(DEVICE_ENTRIES_BEGIN).count(), 1);
         assert_eq!(contents.matches(DEVICE_ENTRIES_END).count(), 1);
-        assert!(contents.contains("PluginDeviceEntriesModel {}"));
+        assert!(contents.contains("PluginDeviceEntriesModel { view: listview }"));
         assert!(contents.contains("// unrelated entry"));
+    }
+
+    #[test]
+    fn dynamic_device_entries_rebuild_the_outer_model_after_id_changes() {
+        let contents = QML_FILES
+            .iter()
+            .find_map(|(name, contents)| {
+                (*name == "PluginDeviceEntriesModel.qml").then_some(*contents)
+            })
+            .unwrap();
+
+        assert!(DEVICE_ENTRIES_BLOCK.contains("PluginDeviceEntriesModel { view: listview }"));
+        assert!(contents.contains("onObservedEntryIdsChanged"));
+        assert!(contents.contains("view.model = null"));
+        assert!(contents.contains("view.model = aggregateModel"));
     }
 
     #[test]

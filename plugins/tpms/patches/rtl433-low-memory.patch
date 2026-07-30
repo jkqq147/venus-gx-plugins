@@ -1,0 +1,7 @@
+diff --git a/include/rtl_433.h b/include/rtl_433.h
+index 136ceb5..f081eb9 100644
+--- a/include/rtl_433.h
++++ b/include/rtl_433.h
+@@ -21 +21 @@
+-#define MAXIMAL_BUF_LENGTH      (256 * 16384)
++#define MAXIMAL_BUF_LENGTH      (4 * 16384)

@@ -5,7 +5,7 @@ use zbus::blocking::Connection;
 use crate::{
     bus_item::{BusItem, BusItemHandle},
     event::Event,
-    state::{unix_time, TpmsState, Wheel, DISCOVERED_LIMIT},
+    state::{unix_time, Reading, TpmsState, Wheel, DISCOVERED_LIMIT},
 };
 
 const UNASSIGNED: &str = "unassigned";
@@ -23,6 +23,19 @@ pub struct BluetoothStats {
     pub manufacturer_data_count: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Rtl433Stats {
+    pub active: bool,
+    pub frame_count: u32,
+    pub last_error: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReceiverStats {
+    pub bluetooth: BluetoothStats,
+    pub rtl433: Rtl433Stats,
+}
+
 impl VenusPublisher {
     pub fn new(
         connection: Connection,
@@ -35,10 +48,10 @@ impl VenusPublisher {
         };
 
         for (path, value) in [
-            ("/Mgmt/ProcessName", "venus-tpms-ble"),
+            ("/Mgmt/ProcessName", "venus-tpms"),
             ("/Mgmt/ProcessVersion", env!("CARGO_PKG_VERSION")),
-            ("/Mgmt/Connection", "bluez"),
-            ("/ProductName", "TPMS BLE"),
+            ("/Mgmt/Connection", "bluez + rtl_433"),
+            ("/ProductName", "TPMS"),
             ("/FirmwareVersion", env!("CARGO_PKG_VERSION")),
             ("/HardwareVersion", ""),
             ("/StatusText", "Starting"),
@@ -46,6 +59,8 @@ impl VenusPublisher {
             ("/Bluetooth/StatusText", "Starting"),
             ("/Bluetooth/Adapter", ""),
             ("/Bluetooth/ReceiverStatus", "Starting"),
+            ("/Receivers/Rtl433/StatusText", "Starting"),
+            ("/Receivers/Rtl433/LastError", ""),
         ] {
             publisher.add(path, BusItem::string(value))?;
         }
@@ -58,6 +73,8 @@ impl VenusPublisher {
             ("/Bluetooth/Discovering", 0),
             ("/Bluetooth/DeviceCount", 0),
             ("/Bluetooth/ManufacturerDataCount", 0),
+            ("/Receivers/Rtl433/Active", 0),
+            ("/Receivers/Rtl433/FrameCount", 0),
         ] {
             publisher.add(path, BusItem::i32(value))?;
         }
@@ -67,10 +84,27 @@ impl VenusPublisher {
             publisher.add(&format!("{root}/Wheel"), BusItem::string(wheel.key()))?;
             publisher.add(&format!("{root}/Name"), BusItem::string(wheel.label()))?;
             publisher.add(&format!("{root}/SensorId"), BusItem::string(""))?;
-            for suffix in ["Pressure", "Temperature", "Battery", "Rssi", "LastSeen"] {
+            for suffix in [
+                "Pressure",
+                "Temperature",
+                "Battery",
+                "BatteryVoltage",
+                "Rssi",
+                "Signal",
+                "Snr",
+                "Noise",
+                "LastSeen",
+            ] {
                 publisher.add(&format!("{root}/{suffix}"), BusItem::invalid())?;
             }
             for (suffix, value) in [
+                ("Source", ""),
+                ("Protocol", ""),
+                ("AlarmText", ""),
+                ("ManufacturerData", ""),
+                ("BatteryDisplay", "--"),
+                ("SignalDisplay", "--"),
+                ("RssiDisplay", "--"),
                 ("State", UNASSIGNED),
                 ("StateText", "Unassigned"),
                 ("Summary", "Unassigned"),
@@ -84,7 +118,16 @@ impl VenusPublisher {
 
         for index in 0..DISCOVERED_LIMIT {
             let root = format!("/Discovered/{index}");
-            for suffix in ["Name", "SensorId", "ManufacturerData"] {
+            for suffix in [
+                "Name",
+                "SensorId",
+                "Source",
+                "Protocol",
+                "AlarmText",
+                "BatteryDisplay",
+                "SignalDisplay",
+                "ManufacturerData",
+            ] {
                 publisher.add(&format!("{root}/{suffix}"), BusItem::string(""))?;
             }
             let sender = events.clone();
@@ -101,7 +144,17 @@ impl VenusPublisher {
                     sender.send(Event::Assign { index, wheel }).map_or(2, |_| 0)
                 }),
             )?;
-            for suffix in ["Pressure", "Temperature", "Battery", "Rssi", "LastSeen"] {
+            for suffix in [
+                "Pressure",
+                "Temperature",
+                "Battery",
+                "BatteryVoltage",
+                "Rssi",
+                "Signal",
+                "Snr",
+                "Noise",
+                "LastSeen",
+            ] {
                 publisher.add(&format!("{root}/{suffix}"), BusItem::invalid())?;
             }
             for (suffix, value) in [
@@ -117,19 +170,22 @@ impl VenusPublisher {
         Ok(publisher)
     }
 
-    pub fn publish(
-        &self,
-        state: &TpmsState,
-        stale_seconds: i64,
-        bluetooth: BluetoothStats,
-    ) -> zbus::Result<()> {
-        let status = if bluetooth.active {
+    pub fn publish(&self, state: &TpmsState, receivers: &ReceiverStats) -> zbus::Result<()> {
+        let bluetooth = receivers.bluetooth;
+        let status = if bluetooth.active || receivers.rtl433.active {
             "Scanning"
         } else {
-            "No Bluetooth adapter"
+            "No TPMS receiver"
         };
         self.string("/StatusText", status)?;
-        self.string("/Bluetooth/StatusText", status)?;
+        self.string(
+            "/Bluetooth/StatusText",
+            if bluetooth.active {
+                "Scanning"
+            } else {
+                "No Bluetooth adapter"
+            },
+        )?;
         self.string(
             "/Bluetooth/Adapter",
             &bluetooth
@@ -148,6 +204,27 @@ impl VenusPublisher {
             },
         )?;
         self.i32("/Bluetooth/Discovering", i32::from(bluetooth.active))?;
+        self.string(
+            "/Receivers/Rtl433/StatusText",
+            if receivers.rtl433.active {
+                if receivers.rtl433.frame_count > 0 {
+                    "Receiving"
+                } else {
+                    "Listening"
+                }
+            } else {
+                "Unavailable"
+            },
+        )?;
+        self.string("/Receivers/Rtl433/LastError", &receivers.rtl433.last_error)?;
+        self.i32(
+            "/Receivers/Rtl433/Active",
+            i32::from(receivers.rtl433.active),
+        )?;
+        self.i32(
+            "/Receivers/Rtl433/FrameCount",
+            receivers.rtl433.frame_count.min(i32::MAX as u32) as i32,
+        )?;
 
         let discovered = state.discovered();
         self.i32("/DiscoveredCount", discovered.len() as i32)?;
@@ -167,37 +244,17 @@ impl VenusPublisher {
             self.string(
                 &format!("{root}/AssignedWheel"),
                 state
-                    .assigned_wheel(&reading.sensor_id)
+                    .assigned_wheel(&reading.sensor_key)
                     .map(Wheel::key)
                     .unwrap_or(UNASSIGNED),
             )?;
-            self.f64(&format!("{root}/Pressure"), reading.pressure_bar)?;
-            self.string(
-                &format!("{root}/PressureDisplay"),
-                &format!("{:.2}", reading.pressure_bar),
-            )?;
-            self.f64(&format!("{root}/Temperature"), reading.temperature_c)?;
-            self.string(
-                &format!("{root}/TemperatureDisplay"),
-                &format!("{:.1}C", reading.temperature_c),
-            )?;
-            self.i32(&format!("{root}/Battery"), reading.battery_percent)?;
-            self.i32(&format!("{root}/Rssi"), reading.rssi)?;
-            self.string(
-                &format!("{root}/RssiDisplay"),
-                &format!("{}dB", reading.rssi),
-            )?;
-            self.i32(&format!("{root}/LastSeen"), reading.last_seen as i32)?;
-            self.string(
-                &format!("{root}/ManufacturerData"),
-                &reading.manufacturer_data_hex,
-            )?;
+            self.publish_reading(&root, reading)?;
         }
 
         let now = unix_time();
         let mut overview = Vec::new();
         for wheel in Wheel::ALL {
-            overview.push(self.publish_wheel(state, wheel, now, stale_seconds)?);
+            overview.push(self.publish_wheel(state, wheel, now)?);
         }
         self.string(
             "/Overview",
@@ -208,13 +265,7 @@ impl VenusPublisher {
         )
     }
 
-    fn publish_wheel(
-        &self,
-        state: &TpmsState,
-        wheel: Wheel,
-        now: i64,
-        stale_seconds: i64,
-    ) -> zbus::Result<String> {
+    fn publish_wheel(&self, state: &TpmsState, wheel: Wheel, now: i64) -> zbus::Result<String> {
         let root = format!("/Slots/{}", wheel.key());
         let sensor_id = state.binding(wheel);
         if sensor_id.is_empty() {
@@ -226,23 +277,29 @@ impl VenusPublisher {
             self.string(&format!("{root}/SensorId"), sensor_id)?;
             return Ok("wait".to_owned());
         };
-        let stale = now - reading.last_seen > stale_seconds;
-        let state_key = if stale { "stale" } else { "ok" };
-        let state_text = if stale { "Stale" } else { "OK" };
+        let stale = now - reading.last_seen > reading.stale_after_seconds();
+        let (state_key, state_text) = if stale {
+            ("stale", "Stale")
+        } else if reading.alarm.is_some() {
+            ("alarm", "Alarm")
+        } else {
+            ("ok", "OK")
+        };
         self.string(&format!("{root}/Name"), &reading.display_name())?;
-        self.string(&format!("{root}/SensorId"), sensor_id)?;
-        self.f64(&format!("{root}/Pressure"), reading.pressure_bar)?;
-        self.f64(&format!("{root}/Temperature"), reading.temperature_c)?;
-        self.i32(&format!("{root}/Battery"), reading.battery_percent)?;
-        self.i32(&format!("{root}/Rssi"), reading.rssi)?;
-        self.i32(&format!("{root}/LastSeen"), reading.last_seen as i32)?;
+        self.string(&format!("{root}/SensorId"), &reading.sensor_id)?;
+        self.publish_reading(&root, reading)?;
         self.string(&format!("{root}/State"), state_key)?;
         self.string(&format!("{root}/StateText"), state_text)?;
+        let temperature = reading
+            .temperature_c
+            .map(|value| format!("{value:.1} C"))
+            .unwrap_or_else(|| "--".to_owned());
+        let battery = battery_display(reading);
         self.string(
             &format!("{root}/Summary"),
             &format!(
-                "{}: {:.2} bar, {:.1} C, {}%",
-                state_text, reading.pressure_bar, reading.temperature_c, reading.battery_percent
+                "{}: {:.2} bar, {}, {}",
+                state_text, reading.pressure_bar, temperature, battery
             ),
         )?;
         let pressure = format!(
@@ -252,22 +309,41 @@ impl VenusPublisher {
         );
         self.string(&format!("{root}/DeviceListValue"), &pressure)?;
         self.string(&format!("{root}/PressureDisplay"), &pressure)?;
-        self.string(
-            &format!("{root}/TemperatureDisplay"),
-            &format!("{:.1}C", reading.temperature_c),
-        )?;
         Ok(pressure)
     }
 
     fn clear_discovered(&self, root: &str) -> zbus::Result<()> {
-        for suffix in ["Name", "SensorId", "ManufacturerData"] {
+        for suffix in [
+            "Name",
+            "SensorId",
+            "Source",
+            "Protocol",
+            "AlarmText",
+            "ManufacturerData",
+        ] {
             self.string(&format!("{root}/{suffix}"), "")?;
         }
         self.string(&format!("{root}/AssignedWheel"), UNASSIGNED)?;
-        for suffix in ["Pressure", "Temperature", "Battery", "Rssi", "LastSeen"] {
+        for suffix in [
+            "Pressure",
+            "Temperature",
+            "Battery",
+            "BatteryVoltage",
+            "Rssi",
+            "Signal",
+            "Snr",
+            "Noise",
+            "LastSeen",
+        ] {
             self.invalid(&format!("{root}/{suffix}"))?;
         }
-        for suffix in ["PressureDisplay", "TemperatureDisplay", "RssiDisplay"] {
+        for suffix in [
+            "PressureDisplay",
+            "TemperatureDisplay",
+            "RssiDisplay",
+            "BatteryDisplay",
+            "SignalDisplay",
+        ] {
             self.string(&format!("{root}/{suffix}"), "--")?;
         }
         Ok(())
@@ -283,8 +359,24 @@ impl VenusPublisher {
     ) -> zbus::Result<()> {
         self.string(&format!("{root}/Name"), wheel.label())?;
         self.string(&format!("{root}/SensorId"), "")?;
-        for suffix in ["Pressure", "Temperature", "Battery", "Rssi", "LastSeen"] {
+        for suffix in [
+            "Pressure",
+            "Temperature",
+            "Battery",
+            "BatteryVoltage",
+            "Rssi",
+            "Signal",
+            "Snr",
+            "Noise",
+            "LastSeen",
+        ] {
             self.invalid(&format!("{root}/{suffix}"))?;
+        }
+        for suffix in ["Source", "Protocol", "AlarmText", "ManufacturerData"] {
+            self.string(&format!("{root}/{suffix}"), "")?;
+        }
+        for suffix in ["BatteryDisplay", "SignalDisplay", "RssiDisplay"] {
+            self.string(&format!("{root}/{suffix}"), "--")?;
         }
         self.string(&format!("{root}/State"), state)?;
         self.string(&format!("{root}/StateText"), state_text)?;
@@ -292,6 +384,53 @@ impl VenusPublisher {
         self.string(&format!("{root}/DeviceListValue"), display)?;
         self.string(&format!("{root}/PressureDisplay"), display)?;
         self.string(&format!("{root}/TemperatureDisplay"), "--")
+    }
+
+    fn publish_reading(&self, root: &str, reading: &Reading) -> zbus::Result<()> {
+        self.string(&format!("{root}/Source"), reading.source.label())?;
+        self.string(&format!("{root}/Protocol"), &reading.protocol)?;
+        self.string(
+            &format!("{root}/AlarmText"),
+            reading.alarm.as_deref().unwrap_or(""),
+        )?;
+        self.f64(&format!("{root}/Pressure"), reading.pressure_bar)?;
+        self.string(
+            &format!("{root}/PressureDisplay"),
+            &format!("{:.2}", reading.pressure_bar),
+        )?;
+        self.optional_f64(&format!("{root}/Temperature"), reading.temperature_c)?;
+        self.string(
+            &format!("{root}/TemperatureDisplay"),
+            &reading
+                .temperature_c
+                .map(|value| format!("{value:.1}C"))
+                .unwrap_or_else(|| "--".to_owned()),
+        )?;
+        self.optional_i32(&format!("{root}/Battery"), reading.battery_percent)?;
+        self.optional_i32(&format!("{root}/BatteryVoltage"), reading.battery_mv)?;
+        self.string(&format!("{root}/BatteryDisplay"), &battery_display(reading))?;
+        self.optional_f64(&format!("{root}/Signal"), reading.signal_value)?;
+        self.optional_f64(&format!("{root}/Snr"), reading.snr_db)?;
+        self.optional_f64(&format!("{root}/Noise"), reading.noise_db)?;
+        if reading.signal_unit == "dBm" {
+            self.optional_i32(
+                &format!("{root}/Rssi"),
+                reading.signal_value.map(|value| value.round() as i32),
+            )?;
+        } else {
+            self.invalid(&format!("{root}/Rssi"))?;
+        }
+        let signal = reading
+            .signal_value
+            .map(|value| format!("{value:.1} {}", reading.signal_unit))
+            .unwrap_or_else(|| "--".to_owned());
+        self.string(&format!("{root}/SignalDisplay"), &signal)?;
+        self.string(&format!("{root}/RssiDisplay"), &signal)?;
+        self.i32(&format!("{root}/LastSeen"), reading.last_seen as i32)?;
+        self.string(
+            &format!("{root}/ManufacturerData"),
+            reading.manufacturer_data_hex.as_deref().unwrap_or(""),
+        )
     }
 
     fn add(&mut self, path: &str, item: BusItem) -> zbus::Result<()> {
@@ -320,7 +459,31 @@ impl VenusPublisher {
         self.handle(path).set_f64(&self.connection, path, value)
     }
 
+    fn optional_i32(&self, path: &str, value: Option<i32>) -> zbus::Result<()> {
+        match value {
+            Some(value) => self.i32(path, value),
+            None => self.invalid(path),
+        }
+    }
+
+    fn optional_f64(&self, path: &str, value: Option<f64>) -> zbus::Result<()> {
+        match value {
+            Some(value) => self.f64(path, value),
+            None => self.invalid(path),
+        }
+    }
+
     fn invalid(&self, path: &str) -> zbus::Result<()> {
         self.handle(path).set_invalid(&self.connection, path)
+    }
+}
+
+fn battery_display(reading: &Reading) -> String {
+    if let Some(percent) = reading.battery_percent {
+        format!("{percent}%")
+    } else if let Some(millivolts) = reading.battery_mv {
+        format!("{:.2} V", millivolts as f64 / 1000.0)
+    } else {
+        "--".to_owned()
     }
 }

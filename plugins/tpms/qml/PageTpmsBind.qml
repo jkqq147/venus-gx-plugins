@@ -23,6 +23,16 @@ MbPage {
 		}
 
 		MbItemValue {
+			description: root.isChinese ? "接收方式" : qsTr("Source")
+			item.bind: root.discoveredPrefix + "/Source"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "协议" : qsTr("Protocol")
+			item.bind: root.discoveredPrefix + "/Protocol"
+		}
+
+		MbItemValue {
 			description: root.isChinese ? "胎压" : qsTr("Pressure")
 			item {
 				bind: root.discoveredPrefix + "/Pressure"

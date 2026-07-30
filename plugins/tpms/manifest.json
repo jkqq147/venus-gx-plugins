@@ -1,12 +1,13 @@
 {
-  "schema": 3,
+  "schema": 5,
   "id": "tpms",
   "name": "TPMS",
-  "description": "通过蓝牙读取轮胎压力和温度，并显示在 GX Dashboard。",
-  "version": "0.1.3",
+  "description": "通过蓝牙或 RTL-SDR 433 MHz 接收胎压数据，并显示在 GX Dashboard。",
+  "version": "0.2.0",
   "runtime": {
     "kind": "native-service",
-    "executable": "bin/venus-tpms-ble"
+    "executable": "bin/venus-tpms",
+    "companion_executables": ["bin/rtl_433"]
   },
   "settings": {
     "enabled_path": "/Settings/Plugins/tpms/Enabled"

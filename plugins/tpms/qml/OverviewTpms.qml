@@ -25,12 +25,12 @@ OverviewPage {
 
 	function stateLabel(state) {
 		if (!root.isChinese)
-			return state === "stale" ? qsTr("Stale") : state === "waiting" ? qsTr("Waiting") : qsTr("Unassigned")
-		return state === "stale" ? "已过期" : state === "waiting" ? "等待数据" : "未绑定"
+			return state === "alarm" ? qsTr("Alarm") : state === "stale" ? qsTr("Stale") : state === "waiting" ? qsTr("Waiting") : qsTr("Unassigned")
+		return state === "alarm" ? "告警" : state === "stale" ? "已过期" : state === "waiting" ? "等待数据" : "未绑定"
 	}
 
 	function stateColor(state) {
-		return state === "ok" ? "#3ECF8E" : state === "stale" ? "#F5A623" : "#8C9AA8"
+		return state === "ok" ? "#3ECF8E" : state === "alarm" ? "#E65054" : state === "stale" ? "#F5A623" : "#8C9AA8"
 	}
 
 	function lastUpdateText(lastSeen) {
@@ -68,7 +68,7 @@ OverviewPage {
 			property VBusItem temperature: VBusItem { bind: tile.slotPrefix + "/TemperatureDisplay" }
 			property VBusItem state: VBusItem { bind: tile.slotPrefix + "/State" }
 			property VBusItem lastSeen: VBusItem { bind: tile.slotPrefix + "/LastSeen" }
-			property bool hasReading: state.value === "ok" || state.value === "stale"
+			property bool hasReading: state.value === "ok" || state.value === "alarm" || state.value === "stale"
 			property int contentX: leftSide ? 0 : 16
 
 			width: 124

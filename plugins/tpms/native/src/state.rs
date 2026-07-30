@@ -12,6 +12,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub const DISCOVERED_LIMIT: usize = 10;
+const BLE_STALE_SECONDS: i64 = 300;
+const RTL433_STALE_SECONDS: i64 = 1800;
 
 #[derive(Debug, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,17 +55,40 @@ impl Wheel {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    Ble,
+    Rtl433,
+}
+
+impl SourceKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ble => "Bluetooth",
+            Self::Rtl433 => "433 MHz",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Reading {
+    pub sensor_key: String,
     pub sensor_id: String,
+    pub source: SourceKind,
+    pub protocol: String,
     pub name: String,
     pub pressure_bar: f64,
-    pub temperature_c: f64,
-    pub battery_percent: i32,
-    pub alarm: i32,
-    pub rssi: i32,
+    pub temperature_c: Option<f64>,
+    pub battery_percent: Option<i32>,
+    pub battery_mv: Option<i32>,
+    pub alarm: Option<String>,
+    pub signal_value: Option<f64>,
+    pub signal_unit: String,
+    pub snr_db: Option<f64>,
+    pub noise_db: Option<f64>,
     pub last_seen: i64,
-    pub manufacturer_data_hex: String,
+    pub manufacturer_data_hex: Option<String>,
 }
 
 impl Reading {
@@ -75,6 +100,20 @@ impl Reading {
             "TPMS_{}",
             &self.sensor_id[self.sensor_id.len().saturating_sub(6)..]
         )
+    }
+
+    pub fn stale_after_seconds(&self) -> i64 {
+        match self.source {
+            SourceKind::Ble => BLE_STALE_SECONDS,
+            SourceKind::Rtl433 => RTL433_STALE_SECONDS,
+        }
+    }
+
+    fn signal_rank(&self) -> i32 {
+        self.signal_value
+            .filter(|value| value.is_finite())
+            .map(|value| (value * 100.0) as i32)
+            .unwrap_or(i32::MIN)
     }
 }
 
@@ -113,19 +152,19 @@ impl TpmsState {
             .unwrap_or("")
     }
 
-    pub fn assigned_wheel(&self, sensor_id: &str) -> Option<Wheel> {
+    pub fn assigned_wheel(&self, sensor_key: &str) -> Option<Wheel> {
         Wheel::ALL
             .into_iter()
-            .find(|wheel| self.binding(*wheel) == sensor_id)
+            .find(|wheel| self.binding(*wheel) == sensor_key)
     }
 
-    pub fn bind(&mut self, wheel: Option<Wheel>, sensor_id: &str) -> io::Result<()> {
+    pub fn bind(&mut self, wheel: Option<Wheel>, sensor_key: &str) -> io::Result<()> {
         let mut next = self.persistent.clone();
         next.bindings.retain(|candidate, bound| {
-            bound != sensor_id && Some(*candidate) != wheel && !bound.is_empty()
+            bound != sensor_key && Some(*candidate) != wheel && !bound.is_empty()
         });
-        if let Some(wheel) = wheel.filter(|_| !sensor_id.is_empty()) {
-            next.bindings.insert(wheel, sensor_id.to_owned());
+        if let Some(wheel) = wheel.filter(|_| !sensor_key.is_empty()) {
+            next.bindings.insert(wheel, sensor_key.to_owned());
         }
         if next == self.persistent {
             return Ok(());
@@ -136,10 +175,10 @@ impl TpmsState {
     }
 
     pub fn update(&mut self, reading: Reading) {
-        self.readings.insert(reading.sensor_id.clone(), reading);
+        self.readings.insert(reading.sensor_key.clone(), reading);
     }
 
-    pub fn prune_expired_unbound(&mut self, now: i64, max_age_seconds: i64) -> bool {
+    pub fn prune_expired_unbound(&mut self, now: i64) -> bool {
         let bound = Wheel::ALL
             .into_iter()
             .map(|wheel| self.binding(wheel).to_owned())
@@ -147,7 +186,7 @@ impl TpmsState {
             .collect::<HashSet<_>>();
         let before = self.readings.len();
         self.readings.retain(|sensor_id, reading| {
-            bound.contains(sensor_id) || now - reading.last_seen <= max_age_seconds
+            bound.contains(sensor_id) || now - reading.last_seen <= reading.stale_after_seconds()
         });
         self.readings.len() != before
     }
@@ -159,7 +198,7 @@ impl TpmsState {
             .filter(|sensor_id| !sensor_id.is_empty())
             .collect::<HashSet<_>>();
         let mut readings = self.readings.values().collect::<Vec<_>>();
-        readings.sort_by_key(|reading| (reading.rssi, reading.last_seen));
+        readings.sort_by_key(|reading| (reading.signal_rank(), reading.last_seen));
         readings.reverse();
 
         let mut selected = readings
@@ -168,10 +207,10 @@ impl TpmsState {
             .take(DISCOVERED_LIMIT)
             .collect::<Vec<_>>();
         for reading in readings {
-            if !bound.contains(reading.sensor_id.as_str())
+            if !bound.contains(reading.sensor_key.as_str())
                 || selected
                     .iter()
-                    .any(|item| item.sensor_id == reading.sensor_id)
+                    .any(|item| item.sensor_key == reading.sensor_key)
             {
                 continue;
             }
@@ -184,17 +223,17 @@ impl TpmsState {
                 selected[index] = reading;
             }
         }
-        selected.sort_by_key(|reading| (reading.rssi, reading.last_seen));
+        selected.sort_by_key(|reading| (reading.signal_rank(), reading.last_seen));
         selected.reverse();
         selected
     }
 
     pub fn reading_for_wheel(&self, wheel: Wheel) -> Option<&Reading> {
-        let sensor_id = self.binding(wheel);
-        if sensor_id.is_empty() {
+        let sensor_key = self.binding(wheel);
+        if sensor_key.is_empty() {
             return None;
         }
-        self.readings.get(sensor_id)
+        self.readings.get(sensor_key)
     }
 
     fn save(&self, persistent: &PersistentState) -> io::Result<()> {
@@ -233,19 +272,26 @@ pub fn unix_time() -> i64 {
 mod tests {
     use std::{fs, os::unix::fs::MetadataExt, thread, time::Duration};
 
-    use super::{Reading, TpmsState, Wheel};
+    use super::{Reading, SourceKind, TpmsState, Wheel};
 
     fn reading(id: &str, rssi: i32) -> Reading {
         Reading {
+            sensor_key: id.to_owned(),
             sensor_id: id.to_owned(),
+            source: SourceKind::Ble,
+            protocol: "BLE test".to_owned(),
             name: String::new(),
             pressure_bar: 6.1,
-            temperature_c: 30.0,
-            battery_percent: 100,
-            alarm: 0,
-            rssi,
+            temperature_c: Some(30.0),
+            battery_percent: Some(100),
+            battery_mv: None,
+            alarm: None,
+            signal_value: Some(rssi as f64),
+            signal_unit: "dBm".to_owned(),
+            snr_db: None,
+            noise_db: None,
             last_seen: 1,
-            manufacturer_data_hex: String::new(),
+            manufacturer_data_hex: Some(String::new()),
         }
     }
 
@@ -289,6 +335,29 @@ mod tests {
     }
 
     #[test]
+    fn source_specific_keys_keep_same_sensor_id_distinct() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = TpmsState::load(directory.path().join("state.json")).unwrap();
+        let ble = reading("0xc4f2", -70);
+        let mut rtl433 = reading("rtl433:steelmate:0xc4f2", -20);
+        rtl433.sensor_id = "0xc4f2".to_owned();
+        rtl433.source = SourceKind::Rtl433;
+        state.update(ble);
+        state.update(rtl433);
+
+        assert_eq!(state.discovered().len(), 2);
+        state
+            .bind(Some(Wheel::FrontLeft), "rtl433:steelmate:0xc4f2")
+            .unwrap();
+        assert_eq!(
+            state
+                .reading_for_wheel(Wheel::FrontLeft)
+                .map(|reading| reading.source),
+            Some(SourceKind::Rtl433)
+        );
+    }
+
+    #[test]
     fn live_readings_are_never_persisted() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state.json");
@@ -299,7 +368,7 @@ mod tests {
         state.update(reading("sensor", -70));
         let mut changed = reading("sensor", -60);
         changed.pressure_bar = 7.2;
-        changed.temperature_c = 42.0;
+        changed.temperature_c = Some(42.0);
         changed.last_seen = 61;
         state.update(changed);
 
@@ -338,7 +407,7 @@ mod tests {
         state.update(reading("unbound", -60));
         state.bind(Some(Wheel::FrontLeft), "bound").unwrap();
 
-        assert!(state.prune_expired_unbound(400, 300));
+        assert!(state.prune_expired_unbound(400));
         let sensors = state
             .discovered()
             .into_iter()

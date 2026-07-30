@@ -8,13 +8,14 @@ MbPage {
 	property VBusItem statusItem: VBusItem { bind: "com.victronenergy.tpms.main/StatusText" }
 	property VBusItem bluetoothStatusItem: VBusItem { bind: "com.victronenergy.tpms.main/Bluetooth/StatusText" }
 	property VBusItem receiverItem: VBusItem { bind: "com.victronenergy.tpms.main/Bluetooth/ReceiverStatus" }
+	property VBusItem rtl433StatusItem: VBusItem { bind: "com.victronenergy.tpms.main/Receivers/Rtl433/StatusText" }
 	property bool isChinese: guiLanguage.valid && guiLanguage.value === "zh"
 	title: root.isChinese ? "诊断" : qsTr("Diagnostics")
 
 	function statusText(value) {
 		if (!root.isChinese)
 			return value
-		return value === "Scanning" ? "扫描中" : value === "No Bluetooth adapter" ? "未检测到蓝牙适配器" : value === "Starting" ? "启动中" : value
+		return value === "Scanning" ? "扫描中" : value === "No TPMS receiver" ? "未检测到 TPMS 接收器" : value === "No Bluetooth adapter" ? "未检测到蓝牙适配器" : value === "Starting" ? "启动中" : value
 	}
 
 	function receiverText(value) {
@@ -47,6 +48,22 @@ MbPage {
 		MbItemValue {
 			description: root.isChinese ? "厂商数据（60 秒）" : qsTr("Manufacturer data (60 sec)")
 			item.bind: "com.victronenergy.tpms.main/Bluetooth/ManufacturerDataCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "433 MHz 接收" : qsTr("433 MHz receiver")
+			item: VBusItem { value: root.receiverText(root.rtl433StatusItem.value) }
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "Steelmate 数据帧" : qsTr("Steelmate frames")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/FrameCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "433 MHz 错误" : qsTr("433 MHz error")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/LastError"
+			show: item.valid && item.value !== ""
 		}
 	}
 }
