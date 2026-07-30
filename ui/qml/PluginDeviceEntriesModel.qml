@@ -3,10 +3,40 @@ import com.victron.velib 1.0
 
 VisualDataModel {
 	id: root
+	property variant view
+	property bool completed
 	property VBusItem entryIds: VBusItem {
 		bind: "com.victronenergy.pluginmanager/DeviceEntryIds"
 	}
+	property string observedEntryIds: entryIds.valid ? String(entryIds.value) : ""
 	model: entryIds.valid && entryIds.value !== "" ? String(entryIds.value).split(",") : []
+
+	// Qt 4.8 can retain stale indexes in the outer VisualModels when this
+	// delegate model changes. Remount it on the next event-loop turn.
+	property variant relayoutTimer: Timer {
+		interval: 0
+		onTriggered: root.rebuildView()
+	}
+
+	Component.onCompleted: completed = true
+
+	onObservedEntryIdsChanged: {
+		if (completed)
+			relayoutTimer.restart()
+	}
+
+	function rebuildView() {
+		if (!view || !view.model)
+			return
+
+		var aggregateModel = view.model
+		view.model = null
+		view.model = aggregateModel
+		if (view.count === 0)
+			return
+		view.currentIndex = 0
+		view.positionViewAtIndex(0, ListView.Beginning)
+	}
 
 	delegate: MbSubMenu {
 		id: pluginEntry
