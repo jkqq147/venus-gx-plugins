@@ -13,6 +13,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    eprintln!("venus-tpms-ble only runs on Linux");
+    eprintln!("venus-tpms only runs on Linux");
     std::process::exit(2);
 }

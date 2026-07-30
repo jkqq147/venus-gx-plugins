@@ -17,19 +17,29 @@ MbPage {
 		}
 
 		MbItemValue {
-			description: root.isChinese ? "电量" : qsTr("Battery")
-			item {
-				bind: root.slotPrefix + "/Battery"
-				unit: "%"
-			}
+			description: root.isChinese ? "接收方式" : qsTr("Source")
+			item.bind: root.slotPrefix + "/Source"
 		}
 
 		MbItemValue {
-			description: qsTr("RSSI")
-			item {
-				bind: root.slotPrefix + "/Rssi"
-				unit: "dBm"
-			}
+			description: root.isChinese ? "协议" : qsTr("Protocol")
+			item.bind: root.slotPrefix + "/Protocol"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "电量" : qsTr("Battery")
+			item.bind: root.slotPrefix + "/BatteryDisplay"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "信号" : qsTr("Signal")
+			item.bind: root.slotPrefix + "/SignalDisplay"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "告警" : qsTr("Alarm")
+			item.bind: root.slotPrefix + "/AlarmText"
+			show: item.valid && item.value !== ""
 		}
 
 		MbItemValue {

@@ -15,8 +15,8 @@ MbPage {
 
 	function stateText(value) {
 		if (!root.isChinese)
-			return value === "ok" ? "OK" : value === "stale" ? "Stale" : value === "waiting" ? "Waiting" : "Unassigned"
-		return value === "ok" ? "正常" : value === "stale" ? "已过期" : value === "waiting" ? "等待数据" : "未绑定"
+			return value === "ok" ? "OK" : value === "alarm" ? "Alarm" : value === "stale" ? "Stale" : value === "waiting" ? "Waiting" : "Unassigned"
+		return value === "ok" ? "正常" : value === "alarm" ? "告警" : value === "stale" ? "已过期" : value === "waiting" ? "等待数据" : "未绑定"
 	}
 
 	model: VisibleItemModel {
