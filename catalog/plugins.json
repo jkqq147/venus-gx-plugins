@@ -8,10 +8,10 @@
       "version": "0.2.0",
       "package": {
         "url": "https://venus-gx-plugins.pages.dev/releases/download/tpms-v0.2.0/tpms-0.2.0.vplugin",
-        "sha256": "b0896362f3f2ec24de57fb1bd7fc4d6c1c8ab37668db755985569b75cb6641f3",
+        "sha256": "83b96403370903ed8c28d2a343935990649e9c169e56daa5b2fd3b6c115e2cb4",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "HOAaBIMgVPUJD1g8015rYhQg6Pz8ND9RaPLmxC9n6jJiEprRFDPOyeXMIYKjHs5aqafMY/JZb9ddPwb412csDg=="
+          "ed25519": "VMcN1+kllez5ASWC3B7cq9Bc/4xUD0Hw3gqfVSKqfl92XKwuniUDkzx5bDRwz+XoOnusMcCLnZrFlHVyqsBJDw=="
         }
       }
     },

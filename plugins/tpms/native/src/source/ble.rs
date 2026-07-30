@@ -32,7 +32,7 @@ pub fn spawn(adapter_index: u16, events: Sender<Event>) {
                     last_seen: unix_time(),
                     manufacturer_data_hex: Some(observation.manufacturer_data_hex),
                 };
-                let _ = reading_events.send(Event::Reading(reading));
+                let _ = reading_events.send(Event::Reading(Box::new(reading)));
             },
             {
                 let stats_events = events.clone();

@@ -153,7 +153,7 @@ mod process {
                         };
                         match parse_line(&line) {
                             Ok(Some(reading)) => {
-                                let _ = stdout_events.send(Event::Reading(reading));
+                                let _ = stdout_events.send(Event::Reading(Box::new(reading)));
                                 let _ = stdout_events.send(Event::Rtl433Frame { generation });
                             }
                             Ok(None) => {}

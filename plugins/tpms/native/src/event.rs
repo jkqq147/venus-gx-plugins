@@ -1,7 +1,7 @@
 use crate::state::{Reading, Wheel};
 
 pub enum Event {
-    Reading(Reading),
+    Reading(Box<Reading>),
     BluetoothStats {
         device_count: usize,
         manufacturer_data_count: usize,

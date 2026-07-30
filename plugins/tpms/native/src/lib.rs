@@ -134,7 +134,7 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
 
         match events_rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Event::Reading(reading)) => {
-                state.update(reading);
+                state.update(*reading);
                 publisher.publish(&state, &receivers)?;
             }
             Ok(Event::BluetoothStats {
