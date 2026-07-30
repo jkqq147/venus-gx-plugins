@@ -27,6 +27,11 @@ pub struct BluetoothStats {
 pub struct Rtl433Stats {
     pub active: bool,
     pub frame_count: u32,
+    pub fsk_activity_count: u32,
+    pub decoder_event_count: u32,
+    pub rejected_frame_count: u32,
+    pub stats_heartbeat_count: u32,
+    pub recent_fsk_activity: bool,
     pub last_error: String,
 }
 
@@ -75,6 +80,10 @@ impl VenusPublisher {
             ("/Bluetooth/ManufacturerDataCount", 0),
             ("/Receivers/Rtl433/Active", 0),
             ("/Receivers/Rtl433/FrameCount", 0),
+            ("/Receivers/Rtl433/FskActivityCount", 0),
+            ("/Receivers/Rtl433/DecoderEventCount", 0),
+            ("/Receivers/Rtl433/RejectedFrameCount", 0),
+            ("/Receivers/Rtl433/StatsHeartbeatCount", 0),
         ] {
             publisher.add(path, BusItem::i32(value))?;
         }
@@ -209,6 +218,8 @@ impl VenusPublisher {
             if receivers.rtl433.active {
                 if receivers.rtl433.frame_count > 0 {
                     "Receiving"
+                } else if receivers.rtl433.recent_fsk_activity {
+                    "RF activity"
                 } else {
                     "Listening"
                 }
@@ -224,6 +235,22 @@ impl VenusPublisher {
         self.i32(
             "/Receivers/Rtl433/FrameCount",
             receivers.rtl433.frame_count.min(i32::MAX as u32) as i32,
+        )?;
+        self.i32(
+            "/Receivers/Rtl433/FskActivityCount",
+            receivers.rtl433.fsk_activity_count.min(i32::MAX as u32) as i32,
+        )?;
+        self.i32(
+            "/Receivers/Rtl433/DecoderEventCount",
+            receivers.rtl433.decoder_event_count.min(i32::MAX as u32) as i32,
+        )?;
+        self.i32(
+            "/Receivers/Rtl433/RejectedFrameCount",
+            receivers.rtl433.rejected_frame_count.min(i32::MAX as u32) as i32,
+        )?;
+        self.i32(
+            "/Receivers/Rtl433/StatsHeartbeatCount",
+            receivers.rtl433.stats_heartbeat_count.min(i32::MAX as u32) as i32,
         )?;
 
         let discovered = state.discovered();

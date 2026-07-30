@@ -7,8 +7,17 @@ use std::time::Duration;
 const ADAPTER_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
 #[cfg(any(target_os = "linux", test))]
+const RTL433_HEARTBEAT_TIMEOUT: Duration =
+    Duration::from_secs(source::rtl433::STATS_HEARTBEAT_TIMEOUT_SECONDS);
+
+#[cfg(any(target_os = "linux", test))]
 fn adapter_retry_due(discovery_active: bool, elapsed: Duration) -> bool {
     !discovery_active && elapsed >= ADAPTER_RETRY_INTERVAL
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn rtl433_heartbeat_expired(process_active: bool, elapsed: Duration) -> bool {
+    process_active && elapsed >= RTL433_HEARTBEAT_TIMEOUT
 }
 
 #[cfg(target_os = "linux")]
@@ -73,6 +82,7 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     let mut rtl433_failures = 0_u32;
     let mut rtl433_retry_seconds = 0_u64;
     let mut last_rtl433_attempt = Instant::now() - Duration::from_secs(60);
+    let mut last_rtl433_heartbeat = Instant::now();
     loop {
         if rtl433_process.is_none()
             && last_rtl433_attempt.elapsed() >= Duration::from_secs(rtl433_retry_seconds)
@@ -82,9 +92,11 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             match Rtl433Process::start(&rtl433_binary, rtl433_generation, events_tx.clone()) {
                 Ok(process) => {
                     rtl433_process = Some(process);
+                    last_rtl433_heartbeat = Instant::now();
                     rtl433_failures = 0;
                     rtl433_retry_seconds = 0;
                     receivers.rtl433.active = true;
+                    receivers.rtl433.recent_fsk_activity = false;
                     receivers.rtl433.last_error.clear();
                     publisher.publish(&state, &receivers)?;
                 }
@@ -149,6 +161,30 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 receivers.rtl433.frame_count = receivers.rtl433.frame_count.saturating_add(1);
                 publisher.publish(&state, &receivers)?;
             }
+            Ok(Event::Rtl433Report {
+                generation,
+                fsk_frames,
+                decoder_events,
+                decoded_ok,
+            }) if generation == rtl433_generation => {
+                last_rtl433_heartbeat = Instant::now();
+                receivers.rtl433.stats_heartbeat_count =
+                    receivers.rtl433.stats_heartbeat_count.saturating_add(1);
+                receivers.rtl433.fsk_activity_count = receivers
+                    .rtl433
+                    .fsk_activity_count
+                    .saturating_add(fsk_frames);
+                receivers.rtl433.decoder_event_count = receivers
+                    .rtl433
+                    .decoder_event_count
+                    .saturating_add(decoder_events);
+                receivers.rtl433.rejected_frame_count = receivers
+                    .rtl433
+                    .rejected_frame_count
+                    .saturating_add(decoder_events.saturating_sub(decoded_ok));
+                receivers.rtl433.recent_fsk_activity = fsk_frames > 0;
+                publisher.publish(&state, &receivers)?;
+            }
             Ok(Event::Rtl433Exited {
                 generation,
                 success,
@@ -158,6 +194,7 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 rtl433_process = None;
                 receivers.rtl433.active = false;
+                receivers.rtl433.recent_fsk_activity = false;
                 rtl433_failures = rtl433_failures.saturating_add(1);
                 rtl433_retry_seconds = retry_delay_seconds(rtl433_failures);
                 receivers.rtl433.last_error = if success {
@@ -168,7 +205,9 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
                 last_rtl433_attempt = Instant::now();
                 publisher.publish(&state, &receivers)?;
             }
-            Ok(Event::Rtl433Frame { .. }) | Ok(Event::Rtl433Exited { .. }) => {}
+            Ok(Event::Rtl433Frame { .. })
+            | Ok(Event::Rtl433Report { .. })
+            | Ok(Event::Rtl433Exited { .. }) => {}
             Ok(Event::Assign { index, wheel }) => {
                 let sensor_key = state
                     .discovered()
@@ -192,6 +231,20 @@ pub fn run_service() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        if rtl433_heartbeat_expired(rtl433_process.is_some(), last_rtl433_heartbeat.elapsed()) {
+            eprintln!("rtl_433 stats heartbeat timed out; restarting receiver");
+            if let Some(mut process) = rtl433_process.take() {
+                let _ = process.stop();
+            }
+            rtl433_generation = rtl433_generation.wrapping_add(1);
+            receivers.rtl433.active = false;
+            receivers.rtl433.recent_fsk_activity = false;
+            receivers.rtl433.last_error = "rtl_433 stats heartbeat timed out".to_owned();
+            rtl433_failures = rtl433_failures.saturating_add(1);
+            rtl433_retry_seconds = retry_delay_seconds(rtl433_failures);
+            last_rtl433_attempt = Instant::now();
+            publisher.publish(&state, &receivers)?;
+        }
         if last_maintenance.elapsed() >= Duration::from_secs(30) {
             state.prune_expired_unbound(unix_time());
             publisher.publish(&state, &receivers)?;
@@ -207,7 +260,10 @@ pub fn run_hci_monitor() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{adapter_retry_due, ADAPTER_RETRY_INTERVAL};
+    use super::{
+        adapter_retry_due, rtl433_heartbeat_expired, ADAPTER_RETRY_INTERVAL,
+        RTL433_HEARTBEAT_TIMEOUT,
+    };
     use std::time::Duration;
 
     #[test]
@@ -219,5 +275,15 @@ mod tests {
     #[test]
     fn active_discovery_never_schedules_an_adapter_retry() {
         assert!(!adapter_retry_due(true, Duration::MAX));
+    }
+
+    #[test]
+    fn rtl433_is_restarted_only_when_an_active_process_loses_its_heartbeat() {
+        assert!(!rtl433_heartbeat_expired(
+            true,
+            RTL433_HEARTBEAT_TIMEOUT - Duration::from_secs(1)
+        ));
+        assert!(rtl433_heartbeat_expired(true, RTL433_HEARTBEAT_TIMEOUT));
+        assert!(!rtl433_heartbeat_expired(false, Duration::MAX));
     }
 }

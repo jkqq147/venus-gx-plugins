@@ -21,7 +21,7 @@ MbPage {
 	function receiverText(value) {
 		if (!root.isChinese)
 			return value
-		return value === "Receiving" ? "接收中" : value === "Listening" ? "等待广播" : value === "Unavailable" ? "不可用" : value === "Starting" ? "启动中" : value
+		return value === "Receiving" ? "接收中" : value === "RF activity" ? "检测到射频活动" : value === "Listening" ? "等待广播" : value === "Unavailable" ? "不可用" : value === "Starting" ? "启动中" : value
 	}
 
 	model: VisibleItemModel {
@@ -56,8 +56,28 @@ MbPage {
 		}
 
 		MbItemValue {
-			description: root.isChinese ? "Steelmate 数据帧" : qsTr("Steelmate frames")
+			description: root.isChinese ? "FSK 射频活动" : qsTr("FSK RF activity")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/FskActivityCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "Steelmate 解码尝试" : qsTr("Steelmate decode attempts")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/DecoderEventCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "Steelmate 已拒绝" : qsTr("Rejected Steelmate frames")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/RejectedFrameCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "Steelmate 有效帧" : qsTr("Valid Steelmate frames")
 			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/FrameCount"
+		}
+
+		MbItemValue {
+			description: root.isChinese ? "接收器心跳" : qsTr("Receiver heartbeat")
+			item.bind: "com.victronenergy.tpms.main/Receivers/Rtl433/StatsHeartbeatCount"
 		}
 
 		MbItemValue {

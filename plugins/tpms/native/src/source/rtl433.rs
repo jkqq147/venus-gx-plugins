@@ -2,9 +2,19 @@ use serde::Deserialize;
 
 use crate::state::{unix_time, Reading, SourceKind};
 
-pub const PROTOCOL_NUMBER: &str = "59";
+pub const PROTOCOL_NUMBER: u32 = 59;
 pub const RETRY_MIN_SECONDS: u64 = 5;
 pub const RETRY_MAX_SECONDS: u64 = 60;
+#[cfg(target_os = "linux")]
+pub const STATS_INTERVAL_SECONDS: u64 = 30;
+pub const STATS_HEARTBEAT_TIMEOUT_SECONDS: u64 = 90;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rtl433Report {
+    pub fsk_frames: u32,
+    pub decoder_events: u32,
+    pub decoded_ok: u32,
+}
 
 #[derive(Debug, Deserialize)]
 struct Record {
@@ -23,28 +33,73 @@ struct Record {
     rssi: Option<f64>,
     snr: Option<f64>,
     noise: Option<f64>,
+    enabled: Option<u32>,
+    frames: Option<FrameReport>,
+    #[serde(default)]
+    stats: Vec<DecoderReport>,
 }
 
-pub fn parse_line(line: &str) -> Result<Option<Reading>, serde_json::Error> {
+#[derive(Debug, Deserialize)]
+struct FrameReport {
+    #[serde(default)]
+    fsk: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct DecoderReport {
+    device: Option<u32>,
+    #[serde(default)]
+    events: u32,
+    #[serde(default)]
+    ok: u32,
+}
+
+enum ParsedLine {
+    Reading(Box<Reading>),
+    Report(Rtl433Report),
+    Ignored,
+}
+
+fn parse_output_line(line: &str) -> Result<ParsedLine, serde_json::Error> {
     let record: Record = serde_json::from_str(line)?;
+    if record.enabled.is_some() {
+        if let Some(frames) = record.frames {
+            let steelmate = record
+                .stats
+                .iter()
+                .filter(|decoder| decoder.device == Some(PROTOCOL_NUMBER))
+                .fold((0_u32, 0_u32), |(events, ok), decoder| {
+                    (
+                        events.saturating_add(decoder.events),
+                        ok.saturating_add(decoder.ok),
+                    )
+                });
+            return Ok(ParsedLine::Report(Rtl433Report {
+                fsk_frames: frames.fsk,
+                decoder_events: steelmate.0,
+                decoded_ok: steelmate.1,
+            }));
+        }
+    }
+
     if record.record_type.as_deref() != Some("TPMS")
         || record.model.as_deref() != Some("Steelmate")
         || record.mic.as_deref() != Some("CHECKSUM")
     {
-        return Ok(None);
+        return Ok(ParsedLine::Ignored);
     }
 
     let Some(sensor_id) = record.id.filter(|id| !id.is_empty()) else {
-        return Ok(None);
+        return Ok(ParsedLine::Ignored);
     };
     let Some(pressure_kpa) = record
         .pressure_kpa
         .filter(|value| value.is_finite() && *value >= 0.0)
     else {
-        return Ok(None);
+        return Ok(ParsedLine::Ignored);
     };
     let sensor_id = sensor_id.to_ascii_lowercase();
-    Ok(Some(Reading {
+    Ok(ParsedLine::Reading(Box::new(Reading {
         sensor_key: format!("rtl433:steelmate:{sensor_id}"),
         sensor_id: sensor_id.clone(),
         source: SourceKind::Rtl433,
@@ -61,7 +116,23 @@ pub fn parse_line(line: &str) -> Result<Option<Reading>, serde_json::Error> {
         noise_db: record.noise.filter(|value| value.is_finite()),
         last_seen: unix_time(),
         manufacturer_data_hex: None,
-    }))
+    })))
+}
+
+#[cfg(test)]
+pub fn parse_line(line: &str) -> Result<Option<Reading>, serde_json::Error> {
+    Ok(match parse_output_line(line)? {
+        ParsedLine::Reading(reading) => Some(*reading),
+        ParsedLine::Report(_) | ParsedLine::Ignored => None,
+    })
+}
+
+#[cfg(test)]
+pub fn parse_report_line(line: &str) -> Result<Option<Rtl433Report>, serde_json::Error> {
+    Ok(match parse_output_line(line)? {
+        ParsedLine::Report(report) => Some(report),
+        ParsedLine::Reading(_) | ParsedLine::Ignored => None,
+    })
 }
 
 pub fn retry_delay_seconds(failures: u32) -> u64 {
@@ -82,7 +153,7 @@ mod process {
 
     use crate::event::Event;
 
-    use super::{parse_line, PROTOCOL_NUMBER};
+    use super::{parse_output_line, ParsedLine, PROTOCOL_NUMBER, STATS_INTERVAL_SECONDS};
 
     pub struct Rtl433Process {
         pid: u32,
@@ -94,23 +165,11 @@ mod process {
             let mut command = Command::new(binary);
             command
                 .args([
-                    "-d",
-                    "0",
-                    "-f",
-                    "433.92M",
-                    "-s",
-                    "250k",
-                    "-b",
-                    "32768",
-                    "-R",
-                    PROTOCOL_NUMBER,
-                    "-F",
-                    "json",
-                    "-M",
-                    "time",
-                    "-M",
-                    "level",
+                    "-d", "0", "-f", "433.92M", "-s", "250k", "-b", "32768", "-R",
                 ])
+                .arg(PROTOCOL_NUMBER.to_string())
+                .args(["-F", "json", "-M", "time", "-M", "level", "-M"])
+                .arg(format!("stats:3:{STATS_INTERVAL_SECONDS}"))
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -151,12 +210,20 @@ mod process {
                         let Ok(line) = line else {
                             break;
                         };
-                        match parse_line(&line) {
-                            Ok(Some(reading)) => {
-                                let _ = stdout_events.send(Event::Reading(Box::new(reading)));
+                        match parse_output_line(&line) {
+                            Ok(ParsedLine::Reading(reading)) => {
+                                let _ = stdout_events.send(Event::Reading(reading));
                                 let _ = stdout_events.send(Event::Rtl433Frame { generation });
                             }
-                            Ok(None) => {}
+                            Ok(ParsedLine::Report(report)) => {
+                                let _ = stdout_events.send(Event::Rtl433Report {
+                                    generation,
+                                    fsk_frames: report.fsk_frames,
+                                    decoder_events: report.decoder_events,
+                                    decoded_ok: report.decoded_ok,
+                                });
+                            }
+                            Ok(ParsedLine::Ignored) => {}
                             Err(error) => eprintln!("invalid rtl_433 JSON: {error}"),
                         }
                     }
@@ -221,7 +288,7 @@ pub use process::Rtl433Process;
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_line, retry_delay_seconds};
+    use super::{parse_line, parse_report_line, retry_delay_seconds, Rtl433Report};
     use crate::state::SourceKind;
 
     #[test]
@@ -276,6 +343,35 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+
+    #[test]
+    fn parses_live_rtl433_stats_report() {
+        let report = parse_report_line(
+            r#"{"time":"2026-07-30 14:22:18","enabled":1,"since":"2026-07-30 14:21:48","frames":{"count":2,"fsk":2,"events":0},"stats":[{"device":59,"name":"Steelmate TPMS","events":2,"ok":0,"messages":0,"fail_sanity":2}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            Some(Rtl433Report {
+                fsk_frames: 2,
+                decoder_events: 2,
+                decoded_ok: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn report_parser_ignores_regular_and_unrelated_json() {
+        assert!(parse_report_line(
+            r#"{"type":"TPMS","model":"Toyota","id":"dc5081e1","pressure_PSI":35.0,"mic":"CRC"}"#,
+        )
+        .unwrap()
+        .is_none());
+        assert!(parse_report_line(r#"{"enabled":1,"stats":[]}"#)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
