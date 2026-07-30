@@ -4,14 +4,14 @@
     {
       "id": "tpms",
       "name": "TPMS",
-      "description": "通过蓝牙读取轮胎压力和温度，并显示在 GX Dashboard。",
-      "version": "0.1.2",
+      "description": "通过蓝牙或 RTL-SDR 433 MHz 接收胎压数据，并显示在 GX Dashboard。",
+      "version": "0.2.0",
       "package": {
-        "url": "https://venus-gx-plugins.pages.dev/releases/download/v0.1.11/tpms-0.1.2.vplugin",
-        "sha256": "466cb1830b58e040a41f36d1a691fe7c3d3dd2c3a20e36091decbe5aa2bd4fab",
+        "url": "https://venus-gx-plugins.pages.dev/releases/download/tpms-v0.2.0/tpms-0.2.0.vplugin",
+        "sha256": "b0896362f3f2ec24de57fb1bd7fc4d6c1c8ab37668db755985569b75cb6641f3",
         "signature": {
           "key_id": "release-2026-01",
-          "ed25519": "dmGBFfC6mzDTsmV1nFiZuzjibEIrKQAOoVP+AQSDTFOQpsZx6s6+LsgajnL1rdicJLFYra77bhipDJkKfmTICw=="
+          "ed25519": "HOAaBIMgVPUJD1g8015rYhQg6Pz8ND9RaPLmxC9n6jJiEprRFDPOyeXMIYKjHs5aqafMY/JZb9ddPwb412csDg=="
         }
       }
     },
