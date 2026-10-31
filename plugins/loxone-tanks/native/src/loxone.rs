@@ -610,7 +610,7 @@ fn parse_value_events(payload: &[u8]) -> Result<Vec<(String, f64)>, LoxoneError>
         ));
     }
     let mut values = Vec::with_capacity(payload.len() / 24);
-    for entry in payload.chunks_exact(24) {
+    for entry in payload.as_chunks::<24>().0 {
         let uuid = binary_uuid(&entry[..16]);
         let value = f64::from_le_bytes(
             entry[16..24]
@@ -648,10 +648,12 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, LoxoneError> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = hex_digit(pair[0])?;
-            let low = hex_digit(pair[1])?;
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[high, low]| {
+            let high = hex_digit(high)?;
+            let low = hex_digit(low)?;
             Ok((high << 4) | low)
         })
         .collect()
@@ -717,10 +719,23 @@ mod tests {
             0x18, 0xeb,
         ];
         payload.extend_from_slice(&66.8_f64.to_le_bytes());
+        // Second 24-byte entry guards the table stride and entry order.
+        payload.extend_from_slice(&[0x01; 16]);
+        payload.extend_from_slice(&(-1.5_f64).to_le_bytes());
         let values = parse_value_events(&payload).unwrap();
-        assert_eq!(values.len(), 1);
+        assert_eq!(values.len(), 2);
         assert_eq!(values[0].0, "105565af-0194-3c1c-fffffd7d9b1518eb");
         assert!((values[0].1 - 66.8).abs() < f64::EPSILON);
+        assert_eq!(values[1].0, "01010101-0101-0101-0101010101010101");
+        assert_eq!(values[1].1, -1.5);
+    }
+
+    // Miniserver HMAC keys arrive as hex; a mis-paired decode would corrupt every login hash.
+    #[test]
+    fn hex_key_decodes_byte_pairs_in_order() {
+        assert_eq!(decode_hex("0aFf10").unwrap(), [0x0a, 0xff, 0x10]);
+        assert!(decode_hex("0g").is_err());
+        assert!(decode_hex("abc").is_err());
     }
 
     #[test]

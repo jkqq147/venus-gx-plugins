@@ -149,7 +149,9 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, SigningError> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = std::str::from_utf8(pair).expect("hexadecimal is ASCII");
             u8::from_str_radix(pair, 16)
